@@ -1,0 +1,29 @@
+# Maven
+target/
+**/target/
+.flattened-pom.xml
+
+# Quarkus
+.quarkus/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# Visual Studio Code
+.vscode/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# Operating systems
+.DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local.properties
