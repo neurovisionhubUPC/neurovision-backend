@@ -1,0 +1,212 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Amazon Cognito resources for the NeuroVision Rehab development environment.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  DeveloperPrincipalArn:
+    Type: String
+    Description: ARN of the IAM user allowed to assume the development service role.
+    AllowedPattern: "^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:user/[A-Za-z0-9+=,.@_/-]+$"
+    ConstraintDescription: Must be the ARN of an IAM user, not the root user or an STS session.
+
+  # Add the deployed web application's callback URL through this parameter.
+  # Example: https://app.example.com/auth/callback
+  # These are OAuth redirect URLs; REST API CORS origins are configured separately at the Ingress/API layer.
+  WebCallbackUrls:
+    Type: CommaDelimitedList
+    Default: "http://localhost:5173/auth/callback"
+    Description: Allowed OAuth callback URLs for the React web application.
+
+  # Add the deployed web application's post-logout URL through this parameter.
+  # Example: https://app.example.com/
+  WebLogoutUrls:
+    Type: CommaDelimitedList
+    Default: "http://localhost:5173/"
+    Description: Allowed post-logout URLs for the React web application.
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "neurovision-${Environment}-users"
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: INACTIVE
+
+      UsernameAttributes:
+        - email
+
+      AutoVerifiedAttributes:
+        - email
+
+      UsernameConfiguration:
+        CaseSensitive: false
+
+      MfaConfiguration: "OFF"
+
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 7
+
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailSubject: "Welcome to NeuroVision Rehab"
+          EmailMessage: >
+            Your username is {username} and your temporary password is {####}.
+            Sign in to NeuroVision Rehab and create a new password.
+          SMSMessage: >
+            Your username is {username} and your temporary password is {####}.
+
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+
+      UserPoolTags:
+        Project: neurovision-rehab
+        Environment: !Ref Environment
+        ManagedBy: cloudformation
+
+  WebAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "neurovision-${Environment}-web"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+
+      ExplicitAuthFlows:
+        - ALLOW_USER_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs: !Ref WebCallbackUrls
+      LogoutURLs: !Ref WebLogoutUrls
+      SupportedIdentityProviders:
+        - COGNITO
+
+      AccessTokenValidity: 15
+      IdTokenValidity: 15
+      RefreshTokenValidity: 7
+
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "neurovision-${Environment}-${AWS::AccountId}"
+      ManagedLoginVersion: 2
+      UserPoolId: !Ref UserPool
+
+  DoctorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: DOCTOR
+      Description: Medical professionals authorized to manage patients.
+      UserPoolId: !Ref UserPool
+
+  PatientGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: PATIENT
+      Description: Patients using the NeuroVision Rehab application.
+      UserPoolId: !Ref UserPool
+
+  IamServiceDevelopmentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: neurovision-iam-dev-role
+      Description: Development role used by iam-service to administer patients in Cognito.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref DeveloperPrincipalArn
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: neurovision-cognito-patient-administration
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AdministerPatientAccounts
+                Effect: Allow
+                Action:
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminAddUserToGroup
+                  - cognito-idp:AdminGetUser
+                Resource: !GetAtt UserPool.Arn
+
+Outputs:
+  AwsRegion:
+    Description: AWS Region containing the Cognito resources.
+    Value: !Ref AWS::Region
+
+  UserPoolId:
+    Description: Cognito User Pool identifier.
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Description: Cognito Web App Client identifier.
+    Value: !Ref WebAppClient
+
+  IssuerUrl:
+    Description: OIDC issuer URL used by Quarkus.
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+
+  JwksUrl:
+    Description: JSON Web Key Set URL.
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/jwks.json"
+
+  IamServiceDevelopmentRoleArn:
+    Description: ARN of the development role assumed by iam-service.
+    Value: !GetAtt IamServiceDevelopmentRole.Arn
+
+  ManagedLoginBaseUrl:
+    Description: Base URL of the Cognito managed login domain.
+    Value: !Sub "https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+
+  AuthorizationEndpoint:
+    Description: OAuth 2.0 authorization endpoint used by the React application with PKCE.
+    Value: !Sub "https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/authorize"
+
+  TokenEndpoint:
+    Description: OAuth 2.0 token endpoint used to exchange the authorization code with PKCE.
+    Value: !Sub "https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/token"
