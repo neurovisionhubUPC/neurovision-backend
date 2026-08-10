@@ -91,6 +91,42 @@ class PatientInvitationTest {
         assertEquals(InvitationStatus.PENDING, invitation.status());
     }
 
+    @Test
+    void shouldRehydrateASentInvitationWithoutRaisingANewEvent() {
+        var patientSubject = new CognitoSubject("d4d1b886-6808-41cf-bc36-0601ef69f7bb");
+        var sentAt = CREATED_AT.plusSeconds(30);
+
+        var invitation = PatientInvitation.rehydrate(
+                new InvitationId(UUID.fromString("f35da653-f9d6-4a58-8f1d-46900b3bf79c")),
+                DOCTOR_SUBJECT,
+                PATIENT_EMAIL,
+                InvitationStatus.SENT,
+                patientSubject,
+                null,
+                CREATED_AT,
+                sentAt);
+
+        assertEquals(InvitationStatus.SENT, invitation.status());
+        assertEquals(patientSubject, invitation.patientSubject().orElseThrow());
+        assertEquals(sentAt, invitation.updatedAt());
+        assertTrue(invitation.pullDomainEvents().isEmpty());
+    }
+
+    @Test
+    void shouldRejectAnInconsistentRehydratedState() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> PatientInvitation.rehydrate(
+                        new InvitationId(UUID.randomUUID()),
+                        DOCTOR_SUBJECT,
+                        PATIENT_EMAIL,
+                        InvitationStatus.SENT,
+                        null,
+                        null,
+                        CREATED_AT,
+                        CREATED_AT));
+    }
+
     private static PatientInvitation newInvitation() {
         return PatientInvitation.initiate(
                 new InvitationId(UUID.fromString("f35da653-f9d6-4a58-8f1d-46900b3bf79c")),

@@ -46,6 +46,52 @@ public final class PatientInvitation {
         return new PatientInvitation(id, invitedByDoctor, patientEmail, createdAt);
     }
 
+    public static PatientInvitation rehydrate(
+            InvitationId id,
+            CognitoSubject invitedByDoctor,
+            EmailAddress patientEmail,
+            InvitationStatus status,
+            CognitoSubject patientSubject,
+            String failureCode,
+            Instant createdAt,
+            Instant updatedAt) {
+        Objects.requireNonNull(status, "Invitation status must not be null");
+        Objects.requireNonNull(updatedAt, "Update time must not be null");
+        if (updatedAt.isBefore(createdAt)) {
+            throw new IllegalArgumentException("Update time must not precede creation time");
+        }
+
+        validateRehydratedState(status, patientSubject, failureCode);
+        var invitation = new PatientInvitation(id, invitedByDoctor, patientEmail, createdAt);
+        invitation.status = status;
+        invitation.patientSubject = patientSubject;
+        invitation.failureCode = failureCode == null ? null : failureCode.trim();
+        invitation.updatedAt = updatedAt;
+        return invitation;
+    }
+
+    private static void validateRehydratedState(
+            InvitationStatus status, CognitoSubject patientSubject, String failureCode) {
+        boolean hasFailure = failureCode != null && !failureCode.isBlank();
+        switch (status) {
+            case PENDING -> {
+                if (patientSubject != null || hasFailure) {
+                    throw new IllegalArgumentException("Pending invitation state is inconsistent");
+                }
+            }
+            case SENT -> {
+                if (patientSubject == null || hasFailure) {
+                    throw new IllegalArgumentException("Sent invitation state is inconsistent");
+                }
+            }
+            case FAILED -> {
+                if (patientSubject != null || !hasFailure) {
+                    throw new IllegalArgumentException("Failed invitation state is inconsistent");
+                }
+            }
+        }
+    }
+
     public void markSent(CognitoSubject patientSubject, Instant occurredAt) {
         ensurePending();
         ensureChronological(occurredAt);

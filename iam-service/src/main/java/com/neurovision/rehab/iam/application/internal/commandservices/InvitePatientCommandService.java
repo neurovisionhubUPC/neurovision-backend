@@ -2,7 +2,6 @@ package com.neurovision.rehab.iam.application.internal.commandservices;
 
 import com.neurovision.rehab.iam.application.ports.out.identity.PatientIdentityProvider;
 import com.neurovision.rehab.iam.application.ports.out.identity.ProvisionedPatientIdentity;
-import com.neurovision.rehab.iam.application.ports.out.messaging.PatientAccountEventPublisher;
 import com.neurovision.rehab.iam.application.ports.out.messaging.PatientAccountInvitedV1;
 import com.neurovision.rehab.iam.application.ports.out.persistence.PatientInvitationRepository;
 import com.neurovision.rehab.iam.domain.model.aggregates.PatientInvitation;
@@ -18,17 +17,14 @@ public final class InvitePatientCommandService {
 
     private final PatientInvitationRepository invitationRepository;
     private final PatientIdentityProvider identityProvider;
-    private final PatientAccountEventPublisher eventPublisher;
     private final Clock clock;
 
     public InvitePatientCommandService(
             PatientInvitationRepository invitationRepository,
             PatientIdentityProvider identityProvider,
-            PatientAccountEventPublisher eventPublisher,
             Clock clock) {
         this.invitationRepository = Objects.requireNonNull(invitationRepository);
         this.identityProvider = Objects.requireNonNull(identityProvider);
-        this.eventPublisher = Objects.requireNonNull(eventPublisher);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -47,10 +43,10 @@ public final class InvitePatientCommandService {
 
         final var provisionedIdentity = provisionIdentity(invitation);
         invitation.markSent(provisionedIdentity.patientSubject(), clock.instant());
-        invitationRepository.save(invitation);
-        invitation.pullDomainEvents().stream()
+        var outboxEvents = invitation.pullDomainEvents().stream()
                 .map(PatientAccountInvitedV1::from)
-                .forEach(eventPublisher::schedule);
+                .toList();
+        invitationRepository.saveWithOutboxEvents(invitation, outboxEvents);
         return invitation;
     }
 

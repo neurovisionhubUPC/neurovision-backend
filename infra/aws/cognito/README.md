@@ -201,9 +201,19 @@ Do not delete an environment that contains required data.
 
 | Topic | Decision |
 | --- | --- |
-| Permissions | The development role can only create, group, and read users in this stack's User Pool. It cannot delete users. |
+| Permissions | The development role can create, group, read, and delete users only in this stack's User Pool. Deletion is restricted to compensation of incomplete patient provisioning. |
 | Email | `COGNITO_DEFAULT` is for early development and has delivery limits. Configure Amazon SES before production use. |
 | Cost | Cognito may remain within its free allowance, but email, SMS, logs, and related AWS services can incur separate charges. Check Billing regularly. |
 | Local configuration | Copy `iam-service/.env.example` to the ignored `iam-service/.env` and replace its placeholders with stack outputs. |
 | Managed login | Cognito hosts sign-in, temporary-password replacement, and password recovery. The React client uses Authorization Code with PKCE. |
 | Redirect URLs | Local and deployed callback/logout URLs are supplied as CloudFormation parameters. They are not REST API CORS settings. |
+
+## Patient provisioning compensation
+
+The Cognito adapter performs the patient invitation in this order:
+
+1. Create the account with email delivery suppressed.
+2. Add the generated Cognito username to the `PATIENT` group.
+3. Resend the invitation explicitly through email.
+
+If a step after account creation fails, the adapter calls `AdminDeleteUser` as a best-effort compensation and preserves the original failure. The role does not grant general Cognito administration; `AdminDeleteUser` is scoped to this stack's User Pool and exists only because this compensation is implemented.

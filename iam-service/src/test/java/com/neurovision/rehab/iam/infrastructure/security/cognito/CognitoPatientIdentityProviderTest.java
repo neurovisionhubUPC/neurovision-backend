@@ -1,0 +1,137 @@
+package com.neurovision.rehab.iam.infrastructure.security.cognito;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.neurovision.rehab.iam.domain.model.valueobjects.EmailAddress;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import software.amazon.awssdk.services.cognitoidentityprovider.CognitoIdentityProviderClient;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminAddUserToGroupRequest;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminAddUserToGroupResponse;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminCreateUserRequest;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminCreateUserResponse;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminDeleteUserRequest;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminDeleteUserResponse;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AttributeType;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.DeliveryMediumType;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.MessageActionType;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.UserType;
+
+class CognitoPatientIdentityProviderTest {
+
+    private static final String USER_POOL_ID = "us-east-1_example";
+    private static final String GENERATED_USERNAME = "0958491a-f12e-41aa-8c5a-e6683ac98948";
+    private static final String PATIENT_SUBJECT = "d4d1b886-6808-41cf-bc36-0601ef69f7bb";
+    private static final EmailAddress PATIENT_EMAIL = new EmailAddress("patient@example.com");
+
+    private CognitoIdentityProviderClient cognitoClient;
+    private CognitoPatientIdentityProvider identityProvider;
+
+    @BeforeEach
+    void setUp() {
+        cognitoClient = mock(CognitoIdentityProviderClient.class);
+        identityProvider = new CognitoPatientIdentityProvider(cognitoClient, USER_POOL_ID);
+    }
+
+    @Test
+    void shouldCreateGroupAndNotifyThePatientInOrder() {
+        when(cognitoClient.adminCreateUser(any(AdminCreateUserRequest.class)))
+                .thenReturn(createdUserResponse(), AdminCreateUserResponse.builder().build());
+        when(cognitoClient.adminAddUserToGroup(any(AdminAddUserToGroupRequest.class)))
+                .thenReturn(AdminAddUserToGroupResponse.builder().build());
+
+        var result = identityProvider.invitePatient(PATIENT_EMAIL);
+
+        assertEquals(PATIENT_SUBJECT, result.patientSubject().value());
+        var ordered = inOrder(cognitoClient);
+        ordered.verify(cognitoClient).adminCreateUser(
+                org.mockito.ArgumentMatchers.<AdminCreateUserRequest>argThat(this::isSuppressedCreation));
+        ordered.verify(cognitoClient).adminAddUserToGroup(
+                org.mockito.ArgumentMatchers.<AdminAddUserToGroupRequest>argThat(this::isPatientGroupAssignment));
+        ordered.verify(cognitoClient).adminCreateUser(
+                org.mockito.ArgumentMatchers.<AdminCreateUserRequest>argThat(this::isEmailResend));
+        verify(cognitoClient, never()).adminDeleteUser(any(AdminDeleteUserRequest.class));
+    }
+
+    @Test
+    void shouldDeleteTheCreatedAccountWhenGroupAssignmentFails() {
+        var groupFailure = new RuntimeException("Group assignment failed");
+        when(cognitoClient.adminCreateUser(any(AdminCreateUserRequest.class))).thenReturn(createdUserResponse());
+        when(cognitoClient.adminAddUserToGroup(any(AdminAddUserToGroupRequest.class))).thenThrow(groupFailure);
+        when(cognitoClient.adminDeleteUser(any(AdminDeleteUserRequest.class)))
+                .thenReturn(AdminDeleteUserResponse.builder().build());
+
+        var error = assertThrows(
+                CognitoPatientProvisioningException.class,
+                () -> identityProvider.invitePatient(PATIENT_EMAIL));
+
+        assertSame(groupFailure, error.getCause());
+        verify(cognitoClient).adminDeleteUser(
+                org.mockito.ArgumentMatchers.<AdminDeleteUserRequest>argThat(this::deletesGeneratedUsername));
+    }
+
+    @Test
+    void shouldPreserveTheOriginalFailureWhenCompensationAlsoFails() {
+        var resendFailure = new RuntimeException("Invitation delivery failed");
+        var cleanupFailure = new RuntimeException("Cleanup failed");
+        when(cognitoClient.adminCreateUser(any(AdminCreateUserRequest.class)))
+                .thenReturn(createdUserResponse())
+                .thenThrow(resendFailure);
+        when(cognitoClient.adminAddUserToGroup(any(AdminAddUserToGroupRequest.class)))
+                .thenReturn(AdminAddUserToGroupResponse.builder().build());
+        when(cognitoClient.adminDeleteUser(any(AdminDeleteUserRequest.class))).thenThrow(cleanupFailure);
+
+        var error = assertThrows(
+                CognitoPatientProvisioningException.class,
+                () -> identityProvider.invitePatient(PATIENT_EMAIL));
+
+        assertSame(resendFailure, error.getCause());
+        assertEquals(List.of(cleanupFailure), List.of(error.getCause().getSuppressed()));
+    }
+
+    private AdminCreateUserResponse createdUserResponse() {
+        return AdminCreateUserResponse.builder()
+                .user(UserType.builder()
+                        .username(GENERATED_USERNAME)
+                        .attributes(
+                                AttributeType.builder().name("sub").value(PATIENT_SUBJECT).build(),
+                                AttributeType.builder().name("email").value(PATIENT_EMAIL.value()).build())
+                        .build())
+                .build();
+    }
+
+    private boolean isSuppressedCreation(AdminCreateUserRequest request) {
+        return USER_POOL_ID.equals(request.userPoolId())
+                && PATIENT_EMAIL.value().equals(request.username())
+                && request.messageAction() == MessageActionType.SUPPRESS
+                && request.userAttributes().stream()
+                        .anyMatch(attribute -> "email".equals(attribute.name())
+                                && PATIENT_EMAIL.value().equals(attribute.value()));
+    }
+
+    private boolean isPatientGroupAssignment(AdminAddUserToGroupRequest request) {
+        return USER_POOL_ID.equals(request.userPoolId())
+                && GENERATED_USERNAME.equals(request.username())
+                && "PATIENT".equals(request.groupName());
+    }
+
+    private boolean isEmailResend(AdminCreateUserRequest request) {
+        return USER_POOL_ID.equals(request.userPoolId())
+                && GENERATED_USERNAME.equals(request.username())
+                && request.messageAction() == MessageActionType.RESEND
+                && request.desiredDeliveryMediums().equals(List.of(DeliveryMediumType.EMAIL));
+    }
+
+    private boolean deletesGeneratedUsername(AdminDeleteUserRequest request) {
+        return USER_POOL_ID.equals(request.userPoolId()) && GENERATED_USERNAME.equals(request.username());
+    }
+}
