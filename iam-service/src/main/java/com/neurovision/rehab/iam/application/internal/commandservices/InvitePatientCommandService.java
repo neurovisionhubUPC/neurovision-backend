@@ -11,7 +11,7 @@ import java.time.Clock;
 import java.util.Objects;
 import java.util.UUID;
 
-public final class InvitePatientCommandService {
+public class InvitePatientCommandService {
 
     private static final String IDENTITY_PROVISIONING_FAILURE = "IDENTITY_PROVISIONING_FAILED";
 

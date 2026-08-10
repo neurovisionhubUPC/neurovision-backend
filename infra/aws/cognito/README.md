@@ -82,6 +82,8 @@ Replace `app.example.com` with the real production hostname. Production should u
 
 The app client is public (`GenerateSecret: false`) and permits only the OAuth authorization-code grant. The React application must generate and send the PKCE `code_verifier` and `code_challenge`; PKCE is client behavior, not a CloudFormation switch.
 
+The template also assigns Cognito's default managed-login branding to the app client. Managed Login v2 does not expose usable login pages for a programmatically created app client until a branding style is associated with it.
+
 ## Configure the assumed-role profile
 
 Read the role ARN from the stack, then create a profile that assumes it through `neurovision-personal`:
@@ -108,10 +110,22 @@ The verification ARN must look like:
 arn:aws:sts::<account-id>:assumed-role/neurovision-iam-dev-role/neurovision-iam-dev
 ```
 
-Select this role only in the terminal that runs the project:
+The AWS CLI can use that role profile directly. For local Java SDK compatibility with credentials created by `aws login`, expose the same temporary role credentials through a process profile (no access keys are stored):
 
 ```powershell
-$env:AWS_PROFILE = "neurovision-iam-dev"
+$PersonalAwsCli = "$env:LOCALAPPDATA\Programs\Amazon\AWSCLIV2\aws.exe"
+$CredentialProcess = "$PersonalAwsCli configure export-credentials --profile neurovision-iam-dev --format process"
+
+aws configure set credential_process $CredentialProcess --profile neurovision-iam-dev-sdk
+aws configure set region $AwsRegion --profile neurovision-iam-dev-sdk
+
+aws sts get-caller-identity --profile neurovision-iam-dev-sdk
+```
+
+Select the SDK bridge profile only in the terminal that runs the project:
+
+```powershell
+$env:AWS_PROFILE = "neurovision-iam-dev-sdk"
 ```
 
 Remove it when the local session ends:
@@ -217,3 +231,26 @@ The Cognito adapter performs the patient invitation in this order:
 3. Resend the invitation explicitly through email.
 
 If a step after account creation fails, the adapter calls `AdminDeleteUser` as a best-effort compensation and preserves the original failure. The role does not grant general Cognito administration; `AdminDeleteUser` is scoped to this stack's User Pool and exists only because this compensation is implemented.
+
+## Real Cognito smoke test
+
+This development-only harness exercises the real browser login and the patient invitation endpoint without adding password-handling endpoints to `iam-service`:
+
+1. Start `iam-service` with the `neurovision-iam-dev` AWS profile and its `.env` values. Disable only the Cognito and STS Dev Services so the application uses real AWS while PostgreSQL and Kafka remain local:
+
+```powershell
+$env:AWS_PROFILE = "neurovision-iam-dev-sdk"
+$env:QUARKUS_COGNITO_USER_POOLS_DEVSERVICES_ENABLED = "false"
+$env:QUARKUS_STS_DEVSERVICES_ENABLED = "false"
+..\mvnw.cmd quarkus:dev
+```
+2. Run the smoke-test script from the repository root:
+
+```powershell
+.\infra\aws\cognito\smoke-test-patient-invitation.ps1 `
+  -PatientEmail "synthetic-patient@example.com"
+```
+
+The script generates an ephemeral PKCE verifier, opens Cognito Managed Login, listens once on the registered `http://localhost:5173/auth/callback`, exchanges the authorization code without printing tokens, and invokes `POST /api/v1/patient-invitations`. Use only controlled synthetic email addresses.
+
+This script is not an application login endpoint. The React SPA will own the same Authorization Code + PKCE redirect flow; `iam-service` remains a bearer-token resource server and never receives user passwords.

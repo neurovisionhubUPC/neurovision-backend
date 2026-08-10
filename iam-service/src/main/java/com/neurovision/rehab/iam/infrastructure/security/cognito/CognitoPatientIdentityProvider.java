@@ -7,7 +7,9 @@ import com.neurovision.rehab.iam.domain.model.valueobjects.EmailAddress;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.Objects;
+import org.jboss.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.services.cognitoidentityprovider.CognitoIdentityProviderClient;
 import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminAddUserToGroupRequest;
 import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminCreateUserRequest;
@@ -20,6 +22,7 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.MessageActi
 @ApplicationScoped
 public class CognitoPatientIdentityProvider implements PatientIdentityProvider {
 
+    private static final Logger LOG = Logger.getLogger(CognitoPatientIdentityProvider.class);
     private static final String PATIENT_GROUP = "PATIENT";
     private static final String SUBJECT_ATTRIBUTE = "sub";
 
@@ -48,9 +51,10 @@ public class CognitoPatientIdentityProvider implements PatientIdentityProvider {
             var patientSubject = requireSubject(createdUser);
 
             assignPatientGroup(createdUsername);
-            sendInvitation(createdUsername);
+            sendInvitation(patientEmail);
             return new ProvisionedPatientIdentity(patientSubject);
         } catch (RuntimeException failure) {
+            logProvisioningFailure(failure);
             compensateCreatedAccount(createdUsername, failure);
             throw new CognitoPatientProvisioningException(failure);
         }
@@ -78,10 +82,10 @@ public class CognitoPatientIdentityProvider implements PatientIdentityProvider {
         cognitoClient.adminAddUserToGroup(request);
     }
 
-    private void sendInvitation(String username) {
+    private void sendInvitation(EmailAddress patientEmail) {
         var request = AdminCreateUserRequest.builder()
                 .userPoolId(userPoolId)
-                .username(username)
+                .username(patientEmail.value())
                 .messageAction(MessageActionType.RESEND)
                 .desiredDeliveryMediums(DeliveryMediumType.EMAIL)
                 .build();
@@ -101,6 +105,22 @@ public class CognitoPatientIdentityProvider implements PatientIdentityProvider {
         } catch (RuntimeException cleanupFailure) {
             originalFailure.addSuppressed(cleanupFailure);
         }
+    }
+
+    private void logProvisioningFailure(RuntimeException failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof AwsServiceException awsFailure) {
+                LOG.errorf(
+                        "Cognito patient provisioning failed [errorCode=%s, statusCode=%d, requestId=%s]",
+                        awsFailure.awsErrorDetails().errorCode(),
+                        awsFailure.statusCode(),
+                        awsFailure.requestId());
+                return;
+            }
+        }
+        LOG.errorf(
+                "Cognito patient provisioning failed [exceptionType=%s]",
+                failure.getClass().getName());
     }
 
     private String requireUsername(AdminCreateUserResponse response) {

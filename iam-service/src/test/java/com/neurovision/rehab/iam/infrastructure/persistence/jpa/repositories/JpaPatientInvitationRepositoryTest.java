@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.neurovision.rehab.iam.application.ports.out.messaging.PatientAccountInvitedV1;
+import com.neurovision.rehab.iam.application.internal.commandservices.PatientAlreadyInvitedException;
 import com.neurovision.rehab.iam.domain.model.aggregates.PatientInvitation;
 import com.neurovision.rehab.iam.domain.model.valueobjects.CognitoSubject;
 import com.neurovision.rehab.iam.domain.model.valueobjects.EmailAddress;
@@ -104,7 +105,7 @@ class JpaPatientInvitationRepositoryTest {
                 "same-patient@example.com");
         repository.save(first);
 
-        assertThrows(RuntimeException.class, () -> repository.save(second));
+        assertThrows(PatientAlreadyInvitedException.class, () -> repository.save(second));
 
         first.markFailed("PROVISIONING_FAILED", CREATED_AT.plusSeconds(30));
         repository.save(first);

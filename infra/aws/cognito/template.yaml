@@ -135,6 +135,14 @@ Resources:
       ManagedLoginVersion: 2
       UserPoolId: !Ref UserPool
 
+  WebAppManagedLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn: UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref WebAppClient
+      UseCognitoProvidedValues: true
+
   DoctorGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:

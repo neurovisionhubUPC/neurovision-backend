@@ -1,6 +1,7 @@
 package com.neurovision.rehab.iam.infrastructure.persistence.jpa.repositories;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.neurovision.rehab.iam.application.internal.commandservices.PatientAlreadyInvitedException;
 import com.neurovision.rehab.iam.application.ports.out.messaging.PatientAccountInvitedV1;
 import com.neurovision.rehab.iam.application.ports.out.persistence.PatientInvitationRepository;
 import com.neurovision.rehab.iam.domain.model.aggregates.PatientInvitation;
@@ -13,6 +14,7 @@ import jakarta.transaction.Transactional;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import org.hibernate.exception.ConstraintViolationException;
 
 @ApplicationScoped
 public class JpaPatientInvitationRepository implements PatientInvitationRepository {
@@ -48,8 +50,15 @@ public class JpaPatientInvitationRepository implements PatientInvitationReposito
     @Override
     @Transactional(Transactional.TxType.REQUIRES_NEW)
     public void save(PatientInvitation invitation) {
-        upsert(invitation);
-        invitationEntities.flush();
+        try {
+            upsert(invitation);
+            invitationEntities.flush();
+        } catch (RuntimeException exception) {
+            if (isActiveEmailConstraintViolation(exception)) {
+                throw new PatientAlreadyInvitedException();
+            }
+            throw exception;
+        }
     }
 
     @Override
@@ -71,5 +80,19 @@ public class JpaPatientInvitationRepository implements PatientInvitationReposito
                 .ifPresentOrElse(
                         entity -> entity.updateFrom(invitation),
                         () -> invitationEntities.persist(PatientInvitationEntity.fromDomain(invitation)));
+    }
+
+    private static boolean isActiveEmailConstraintViolation(Throwable exception) {
+        for (var cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ConstraintViolationException violation
+                    && "uq_patient_invitations_active_email".equals(violation.getConstraintName())) {
+                return true;
+            }
+            if (cause.getMessage() != null
+                    && cause.getMessage().contains("uq_patient_invitations_active_email")) {
+                return true;
+            }
+        }
+        return false;
     }
 }

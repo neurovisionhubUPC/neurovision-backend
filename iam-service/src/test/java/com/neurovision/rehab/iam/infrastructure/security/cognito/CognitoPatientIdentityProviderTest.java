@@ -126,7 +126,7 @@ class CognitoPatientIdentityProviderTest {
 
     private boolean isEmailResend(AdminCreateUserRequest request) {
         return USER_POOL_ID.equals(request.userPoolId())
-                && GENERATED_USERNAME.equals(request.username())
+                && PATIENT_EMAIL.value().equals(request.username())
                 && request.messageAction() == MessageActionType.RESEND
                 && request.desiredDeliveryMediums().equals(List.of(DeliveryMediumType.EMAIL));
     }
