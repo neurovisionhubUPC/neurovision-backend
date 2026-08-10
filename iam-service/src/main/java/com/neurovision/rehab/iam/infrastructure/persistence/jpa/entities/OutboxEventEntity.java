@@ -51,6 +51,15 @@ public class OutboxEventEntity {
     @Column(name = "last_error")
     private String lastError;
 
+    @Column(name = "next_attempt_at", nullable = false, insertable = false)
+    private Instant nextAttemptAt;
+
+    @Column(name = "locked_by", length = 128)
+    private String lockedBy;
+
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
+
     protected OutboxEventEntity() {}
 
     public static OutboxEventEntity from(PatientAccountInvitedV1 event, ObjectMapper objectMapper) {
@@ -76,5 +85,21 @@ public class OutboxEventEntity {
 
     public JsonNode payload() {
         return payload;
+    }
+
+    public Instant publishedAt() {
+        return publishedAt;
+    }
+
+    public int publishAttempts() {
+        return publishAttempts;
+    }
+
+    public String lastError() {
+        return lastError;
+    }
+
+    public String lockedBy() {
+        return lockedBy;
     }
 }
