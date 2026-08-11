@@ -31,8 +31,8 @@ kubectl wait --for=condition=complete job/kafka-topics -n neurovision --timeout=
 | Apache Kafka | `kafka:9092` | 2 GiB `local-path` PVC |
 
 Kafka runs as a single combined KRaft broker/controller. Topic auto-creation is
-disabled; the `kafka-topics` Job creates the application topic and its DLQ
-idempotently.
+disabled; the `kafka-topics` Job creates application, DLQ, and replay-audit
+topics idempotently.
 
 ## Verify
 
@@ -46,6 +46,11 @@ Expected topics:
 
 - `patient-account-invited.v1`
 - `patient-account-invited.v1.dlq`
+- `neurovision.dlq-replay-audit.v1`
+
+Use the [DLQ operations runbook](../operations/README.md) to inspect and replay
+records. A replay never deletes the original DLQ record because Kafka topics are
+append-only logs.
 
 ## Scope boundary
 

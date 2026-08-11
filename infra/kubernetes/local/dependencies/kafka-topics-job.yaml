@@ -46,6 +46,14 @@ spec:
                 --topic patient-account-invited.v1.dlq \
                 --partitions 3 \
                 --replication-factor 1
+
+              /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server kafka:9092 \
+                --create \
+                --if-not-exists \
+                --topic neurovision.dlq-replay-audit.v1 \
+                --partitions 1 \
+                --replication-factor 1
           resources:
             requests:
               cpu: 50m
