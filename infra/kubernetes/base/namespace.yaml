@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurovision
+  labels:
+    app.kubernetes.io/part-of: neurovision-rehab
+

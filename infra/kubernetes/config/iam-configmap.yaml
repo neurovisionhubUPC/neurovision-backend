@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iam-service-config
+  namespace: neurovision
+  labels:
+    app.kubernetes.io/name: iam-service
+    app.kubernetes.io/component: identity
+    app.kubernetes.io/part-of: neurovision-rehab
+data:
+  AWS_REGION: us-east-1
+  COGNITO_USER_POOL_ID: us-east-1_6eG3zLkZ2
+  COGNITO_CLIENT_ID: 52rlcllcsdk0rdvbqebe8efbpm
+  COGNITO_ISSUER_URL: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_6eG3zLkZ2
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://iam-postgresql:5432/neurovision_iam
+

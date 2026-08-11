@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: profile-service
+  namespace: neurovision
+  labels:
+    app.kubernetes.io/name: profile-service
+    app.kubernetes.io/component: profile
+    app.kubernetes.io/part-of: neurovision-rehab
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: profile-service
+    app.kubernetes.io/part-of: neurovision-rehab
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+
