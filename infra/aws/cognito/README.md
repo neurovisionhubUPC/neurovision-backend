@@ -234,21 +234,50 @@ If a step after account creation fails, the adapter calls `AdminDeleteUser` as a
 
 ## Real Cognito smoke test
 
-This development-only harness exercises the real browser login and the patient invitation endpoint without adding password-handling endpoints to `iam-service`:
+This development-only harness exercises real Cognito browser login and the patient invitation endpoint without adding password-handling endpoints to `iam-service`. The same script supports both k3d and direct Quarkus Dev Mode; do not duplicate the authentication flow in separate scripts.
 
-1. Start `iam-service` with the `neurovision-iam-dev` AWS profile and its `.env` values. Disable only the Cognito and STS Dev Services so the application uses real AWS while PostgreSQL and Kafka remain local:
+| Mode | IAM base URL | PostgreSQL and Kafka |
+| --- | --- | --- |
+| k3d | `https://localhost:8443` | Explicit workloads inside the cluster |
+| Quarkus Dev Mode | `http://localhost:8080` | Quarkus Dev Services |
+
+### k3d
+
+1. Refresh IAM's temporary AWS credentials and restart the deployed Pod:
+
+```powershell
+.\infra\kubernetes\config\configure-local-secrets.ps1 -SkipTls
+kubectl rollout restart deployment/iam-service -n neurovision
+kubectl rollout status deployment/iam-service -n neurovision --timeout=180s
+```
+
+2. Run the smoke-test script from the repository root. Its default IAM URL is `https://localhost:8443`:
+
+```powershell
+.\infra\aws\cognito\smoke-test-patient-invitation.ps1 `
+  -PatientEmail "synthetic-patient@example.com"
+```
+
+### Quarkus Dev Mode without Kubernetes
+
+1. In the terminal that will run IAM, select the limited SDK profile and prevent Cognito/STS Dev Services from replacing real AWS:
 
 ```powershell
 $env:AWS_PROFILE = "neurovision-iam-dev-sdk"
 $env:QUARKUS_COGNITO_USER_POOLS_DEVSERVICES_ENABLED = "false"
 $env:QUARKUS_STS_DEVSERVICES_ENABLED = "false"
-..\mvnw.cmd quarkus:dev
+
+.\mvnw.cmd -pl iam-service quarkus:dev
 ```
-2. Run the smoke-test script from the repository root:
+
+PostgreSQL and Kafka remain local and are started by Quarkus Dev Services. The Cognito identifiers are loaded from `iam-service/.env`; AWS credentials continue to come from the SDK profile rather than that file.
+
+2. In a second terminal, target IAM directly:
 
 ```powershell
 .\infra\aws\cognito\smoke-test-patient-invitation.ps1 `
-  -PatientEmail "synthetic-patient@example.com"
+  -PatientEmail "synthetic-patient@example.com" `
+  -IamServiceBaseUrl "http://localhost:8080"
 ```
 
 The script generates an ephemeral PKCE verifier, opens Cognito Managed Login, listens once on the registered `http://localhost:5173/auth/callback`, exchanges the authorization code without printing tokens, and invokes `POST /api/v1/patient-invitations`. Use only controlled synthetic email addresses.

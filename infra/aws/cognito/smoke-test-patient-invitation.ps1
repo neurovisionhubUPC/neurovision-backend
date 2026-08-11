@@ -1,10 +1,28 @@
 [CmdletBinding()]
+<#
+.SYNOPSIS
+Runs the real Cognito PKCE and patient-invitation smoke test against a reachable IAM service.
+
+.EXAMPLE
+./infra/aws/cognito/smoke-test-patient-invitation.ps1 `
+  -PatientEmail "synthetic-patient@example.com"
+
+Uses the local k3d HTTPS Gateway at https://localhost:8443.
+
+.EXAMPLE
+./infra/aws/cognito/smoke-test-patient-invitation.ps1 `
+  -PatientEmail "synthetic-patient@example.com" `
+  -IamServiceBaseUrl "http://localhost:8080"
+
+Uses iam-service running directly in Quarkus Dev Mode. PostgreSQL and Kafka can be
+provided by Quarkus Dev Services; Cognito remains the real AWS development pool.
+#>
 param(
     [string] $PatientEmail = "u202114714@upc.edu.pe",
     [string] $StackName = "neurovision-dev-cognito",
     [string] $AwsProfile = "neurovision-personal",
     [string] $AwsRegion = "us-east-1",
-    [string] $IamServiceBaseUrl = "http://localhost:8080"
+    [string] $IamServiceBaseUrl = "https://localhost:8443"
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,10 +58,25 @@ function Get-StackOutput([string] $OutputKey) {
     return $value.Trim()
 }
 
+$invitationEndpoint = "$IamServiceBaseUrl/api/v1/patient-invitations"
+$preflightStatus = $null
 try {
-    Invoke-WebRequest -UseBasicParsing -Uri "$IamServiceBaseUrl/q/health/ready" -TimeoutSec 5 | Out-Null
+    $preflightResponse = Invoke-WebRequest `
+        -UseBasicParsing `
+        -Method Get `
+        -Uri $invitationEndpoint `
+        -TimeoutSec 5
+    $preflightStatus = [int] $preflightResponse.StatusCode
 } catch {
-    throw "iam-service is not ready at $IamServiceBaseUrl. Start it before running this smoke test."
+    if ($null -ne $_.Exception.Response) {
+        $preflightStatus = [int] $_.Exception.Response.StatusCode
+    } else {
+        throw "iam-service is not reachable through $IamServiceBaseUrl. $($_.Exception.Message)"
+    }
+}
+
+if ($preflightStatus -notin @(401, 405)) {
+    throw "Unexpected IAM preflight status $preflightStatus at $invitationEndpoint."
 }
 
 $clientId = Get-StackOutput "UserPoolClientId"
@@ -124,7 +157,7 @@ try {
 
     $invitation = Invoke-RestMethod `
         -Method Post `
-        -Uri "$IamServiceBaseUrl/api/v1/patient-invitations" `
+        -Uri $invitationEndpoint `
         -ContentType "application/json" `
         -Headers @{ Authorization = "Bearer $($tokens.access_token)" } `
         -Body (@{ patientEmail = $PatientEmail } | ConvertTo-Json -Compress)
