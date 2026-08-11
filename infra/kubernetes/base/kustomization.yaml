@@ -3,5 +3,3 @@ kind: Kustomization
 
 resources:
   - namespace.yaml
-  - iam-service.yaml
-  - profile-service.yaml
