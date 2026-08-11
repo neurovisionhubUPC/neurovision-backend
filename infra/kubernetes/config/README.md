@@ -17,8 +17,10 @@ The script refuses to write unless the active context is
 |---|---|---|
 | `iam-service-config` | `neurovision` | Cognito identifiers, Kafka address, and IAM database URL |
 | `profile-service-config` | `neurovision` | OIDC identifiers, Kafka address, and Profile database URL |
+| `clinical-service-config` | `neurovision` | OIDC identifiers, Kafka address, and Clinical database URL |
 | `iam-database-credentials` | `neurovision` | Stable generated IAM database credentials |
 | `profile-database-credentials` | `neurovision` | Stable generated Profile database credentials |
+| `clinical-database-credentials` | `neurovision` | Stable generated Clinical database credentials |
 | `iam-aws-credentials` | `neurovision` | Temporary credentials exported from the limited AWS role |
 | `neurovision-local-tls` | `kube-system` | Local HTTPS certificate consumed by the Traefik Gateway |
 

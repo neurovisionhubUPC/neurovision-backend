@@ -4,5 +4,6 @@ kind: Kustomization
 resources:
   - iam-postgresql.yaml
   - profile-postgresql.yaml
+  - clinical-postgresql.yaml
   - kafka.yaml
   - kafka-topics-job.yaml

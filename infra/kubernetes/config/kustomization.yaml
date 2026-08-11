@@ -4,4 +4,4 @@ kind: Kustomization
 resources:
   - iam-configmap.yaml
   - profile-configmap.yaml
-
+  - clinical-configmap.yaml

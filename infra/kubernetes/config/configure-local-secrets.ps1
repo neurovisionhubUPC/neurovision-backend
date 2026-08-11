@@ -94,6 +94,7 @@ New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 try {
     Ensure-DatabaseSecret -Name "iam-database-credentials" -Username "neurovision_iam" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
     Ensure-DatabaseSecret -Name "profile-database-credentials" -Username "neurovision_profile" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
+    Ensure-DatabaseSecret -Name "clinical-database-credentials" -Username "neurovision_clinical" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
 
     if (-not $SkipAws) {
         $awsCli = Join-Path $env:LOCALAPPDATA "Programs\Amazon\AWSCLIV2\aws.exe"

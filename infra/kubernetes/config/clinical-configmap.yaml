@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clinical-service-config
+  namespace: neurovision
+  labels:
+    app.kubernetes.io/name: clinical-service
+    app.kubernetes.io/component: clinical
+    app.kubernetes.io/part-of: neurovision-rehab
+data:
+  COGNITO_CLIENT_ID: 52rlcllcsdk0rdvbqebe8efbpm
+  COGNITO_ISSUER_URL: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_6eG3zLkZ2
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://clinical-postgresql:5432/neurovision_clinical

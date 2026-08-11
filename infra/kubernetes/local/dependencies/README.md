@@ -18,6 +18,7 @@ kubectl apply -k .\infra\kubernetes\local\dependencies
 
 kubectl rollout status statefulset/iam-postgresql -n neurovision --timeout=180s
 kubectl rollout status statefulset/profile-postgresql -n neurovision --timeout=180s
+kubectl rollout status statefulset/clinical-postgresql -n neurovision --timeout=180s
 kubectl rollout status statefulset/kafka -n neurovision --timeout=300s
 kubectl wait --for=condition=complete job/kafka-topics -n neurovision --timeout=180s
 ```
@@ -28,6 +29,7 @@ kubectl wait --for=condition=complete job/kafka-topics -n neurovision --timeout=
 |---|---|---|
 | IAM PostgreSQL | `iam-postgresql:5432` | 1 GiB `local-path` PVC |
 | Profile PostgreSQL | `profile-postgresql:5432` | 1 GiB `local-path` PVC |
+| Clinical PostgreSQL | `clinical-postgresql:5432` | 1 GiB `local-path` PVC |
 | Apache Kafka | `kafka:9092` | 2 GiB `local-path` PVC |
 
 Kafka runs as a single combined KRaft broker/controller. Topic auto-creation is

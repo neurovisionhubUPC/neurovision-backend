@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: clinical-postgresql
+  namespace: neurovision
+  labels:
+    app.kubernetes.io/name: clinical-postgresql
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: neurovision-rehab
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: clinical-postgresql
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clinical-postgresql
+  namespace: neurovision
+  labels:
+    app.kubernetes.io/name: clinical-postgresql
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: neurovision-rehab
+spec:
+  serviceName: clinical-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: clinical-postgresql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: clinical-postgresql
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: neurovision-rehab
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: postgresql
+          image: postgres:18.4-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: neurovision_clinical
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: clinical-database-credentials
+                  key: QUARKUS_DATASOURCE_USERNAME
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clinical-database-credentials
+                  key: QUARKUS_DATASOURCE_PASSWORD
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi
