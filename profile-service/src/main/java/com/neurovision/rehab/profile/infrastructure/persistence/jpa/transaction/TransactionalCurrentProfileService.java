@@ -2,9 +2,11 @@ package com.neurovision.rehab.profile.infrastructure.persistence.jpa.transaction
 
 import com.neurovision.rehab.profile.application.internal.commandservices.CompleteCurrentProfileCommand;
 import com.neurovision.rehab.profile.application.internal.commandservices.CompleteCurrentProfileCommandService;
+import com.neurovision.rehab.profile.application.internal.commandservices.OnboardDoctorCommand;
+import com.neurovision.rehab.profile.application.internal.commandservices.OnboardDoctorCommandService;
+import com.neurovision.rehab.profile.application.internal.queryservices.CurrentProfile;
 import com.neurovision.rehab.profile.application.internal.queryservices.GetCurrentProfileQuery;
 import com.neurovision.rehab.profile.application.internal.queryservices.GetCurrentProfileQueryService;
-import com.neurovision.rehab.profile.domain.model.aggregates.UserProfile;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 import java.util.Objects;
@@ -14,21 +16,31 @@ public class TransactionalCurrentProfileService {
 
     private final GetCurrentProfileQueryService queryService;
     private final CompleteCurrentProfileCommandService commandService;
+    private final OnboardDoctorCommandService onboardDoctorService;
 
     public TransactionalCurrentProfileService(
             GetCurrentProfileQueryService queryService,
-            CompleteCurrentProfileCommandService commandService) {
+            CompleteCurrentProfileCommandService commandService,
+            OnboardDoctorCommandService onboardDoctorService) {
         this.queryService = Objects.requireNonNull(queryService);
         this.commandService = Objects.requireNonNull(commandService);
+        this.onboardDoctorService = Objects.requireNonNull(onboardDoctorService);
     }
 
     @Transactional(Transactional.TxType.SUPPORTS)
-    public UserProfile get(String cognitoSubject) {
+    public CurrentProfile get(String cognitoSubject) {
         return queryService.handle(new GetCurrentProfileQuery(cognitoSubject));
     }
 
     @Transactional(Transactional.TxType.REQUIRED)
-    public UserProfile complete(CompleteCurrentProfileCommand command) {
-        return commandService.handle(command);
+    public CurrentProfile complete(CompleteCurrentProfileCommand command) {
+        return CurrentProfile.withoutProfessionalDetails(commandService.handle(command));
+    }
+
+    @Transactional(Transactional.TxType.REQUIRED)
+    public CurrentProfile onboardDoctor(OnboardDoctorCommand command) {
+        var result = onboardDoctorService.handle(command);
+        return CurrentProfile.withProfessionalDetails(
+                result.userProfile(), result.doctorProfile());
     }
 }

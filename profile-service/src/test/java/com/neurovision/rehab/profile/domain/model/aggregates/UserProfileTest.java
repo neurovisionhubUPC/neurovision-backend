@@ -34,6 +34,17 @@ class UserProfileTest {
     }
 
     @Test
+    void shouldRegisterADoctorPendingProfileCompletion() {
+        var subject = new CognitoSubject("doctor-cognito-sub");
+
+        var profile = UserProfile.registerDoctor(PROFILE_ID, subject, CREATED_AT);
+
+        assertEquals(subject, profile.cognitoSubject());
+        assertEquals(ProfileType.DOCTOR, profile.type());
+        assertEquals(ProfileStatus.PENDING_COMPLETION, profile.status());
+    }
+
+    @Test
     void shouldRehydrateAnExistingActiveDoctorProfile() {
         var updatedAt = CREATED_AT.plusSeconds(60);
 

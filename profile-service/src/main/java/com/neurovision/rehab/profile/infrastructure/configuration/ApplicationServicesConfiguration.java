@@ -2,8 +2,10 @@ package com.neurovision.rehab.profile.infrastructure.configuration;
 
 import com.neurovision.rehab.profile.application.internal.commandservices.RegisterInvitedPatientCommandService;
 import com.neurovision.rehab.profile.application.internal.commandservices.CompleteCurrentProfileCommandService;
+import com.neurovision.rehab.profile.application.internal.commandservices.OnboardDoctorCommandService;
 import com.neurovision.rehab.profile.application.internal.queryservices.GetCurrentProfileQueryService;
 import com.neurovision.rehab.profile.application.ports.out.persistence.InboxEventRepository;
+import com.neurovision.rehab.profile.application.ports.out.persistence.DoctorProfileRepository;
 import com.neurovision.rehab.profile.application.ports.out.persistence.UserProfileRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
@@ -30,8 +32,22 @@ public class ApplicationServicesConfiguration {
 
     @Produces
     @ApplicationScoped
+    OnboardDoctorCommandService onboardDoctorCommandService(
+            UserProfileRepository userProfileRepository,
+            DoctorProfileRepository doctorProfileRepository) {
+        return new OnboardDoctorCommandService(
+                userProfileRepository,
+                doctorProfileRepository,
+                UUID::randomUUID,
+                UUID::randomUUID,
+                Clock.systemUTC());
+    }
+
+    @Produces
+    @ApplicationScoped
     GetCurrentProfileQueryService getCurrentProfileQueryService(
-            UserProfileRepository profileRepository) {
-        return new GetCurrentProfileQueryService(profileRepository);
+            UserProfileRepository profileRepository,
+            DoctorProfileRepository doctorProfileRepository) {
+        return new GetCurrentProfileQueryService(profileRepository, doctorProfileRepository);
     }
 }

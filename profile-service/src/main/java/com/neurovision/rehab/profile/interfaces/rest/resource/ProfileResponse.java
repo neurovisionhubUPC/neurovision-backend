@@ -13,5 +13,7 @@ public record ProfileResponse(
         String documentNumber,
         LocalDate birthDate,
         String phone,
+        String specialty,
+        String medicalLicense,
         Instant createdAt,
         Instant updatedAt) {}

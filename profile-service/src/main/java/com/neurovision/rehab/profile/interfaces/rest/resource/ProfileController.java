@@ -44,6 +44,14 @@ public class ProfileController {
         return ProfileRestAssembler.toResponse(profiles.complete(command));
     }
 
+    @PUT
+    @Path("/professional")
+    @RolesAllowed("DOCTOR")
+    public ProfileResponse onboardDoctor(@NotNull @Valid OnboardDoctorRequest request) {
+        var command = ProfileRestAssembler.toCommand(request, authenticatedSubject());
+        return ProfileRestAssembler.toResponse(profiles.onboardDoctor(command));
+    }
+
     private String authenticatedSubject() {
         if (securityIdentity.getPrincipal() instanceof JsonWebToken accessToken) {
             return accessToken.getSubject();

@@ -53,6 +53,18 @@ public final class UserProfile {
                 occurredAt);
     }
 
+    public static UserProfile registerDoctor(
+            ProfileId id, CognitoSubject cognitoSubject, Instant registeredAt) {
+        return new UserProfile(
+                id,
+                cognitoSubject,
+                ProfileType.DOCTOR,
+                ProfileStatus.PENDING_COMPLETION,
+                null,
+                registeredAt,
+                registeredAt);
+    }
+
     public static UserProfile rehydrate(
             ProfileId id,
             CognitoSubject cognitoSubject,
