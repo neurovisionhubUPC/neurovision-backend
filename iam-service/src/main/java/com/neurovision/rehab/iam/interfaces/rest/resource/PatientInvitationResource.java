@@ -12,9 +12,11 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import io.quarkus.security.identity.SecurityIdentity;
 import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.jboss.resteasy.reactive.RestResponse;
+
+import static jakarta.ws.rs.core.Response.Status.CREATED;
 
 @Path("/api/v1/patient-invitations")
 @Consumes(MediaType.APPLICATION_JSON)
@@ -34,12 +36,11 @@ public class PatientInvitationResource {
 
     @POST
     @RolesAllowed("DOCTOR")
-    public Response invitePatient(@NotNull @Valid InvitePatientRequest request) {
+    public RestResponse<PatientInvitationResponse> invitePatient(
+            @NotNull @Valid InvitePatientRequest request) {
         var command = PatientInvitationRestAssembler.toCommand(request, doctorSubject());
         var invitation = commandService.handle(command);
-        return Response.status(Response.Status.CREATED)
-                .entity(PatientInvitationRestAssembler.toResponse(invitation))
-                .build();
+        return RestResponse.status(CREATED, PatientInvitationRestAssembler.toResponse(invitation));
     }
 
     private String doctorSubject() {

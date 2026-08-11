@@ -1,9 +1,11 @@
 package com.neurovision.rehab.profile.interfaces.events.contracts;
 
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
+@RegisterForReflection
 public record PatientAccountInvitedV1(
         UUID eventId,
         UUID invitationId,
