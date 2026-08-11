@@ -15,6 +15,7 @@
     <modules>
         <module>iam-service</module>
         <module>profile-service</module>
+        <module>clinical-service</module>
     </modules>
 
     <properties>
