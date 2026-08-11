@@ -5,9 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.neurovision.rehab.profile.domain.model.valueobjects.CognitoSubject;
 import com.neurovision.rehab.profile.domain.model.valueobjects.ProfileId;
+import com.neurovision.rehab.profile.domain.model.valueobjects.PersonalDetails;
 import com.neurovision.rehab.profile.domain.model.valueobjects.ProfileStatus;
 import com.neurovision.rehab.profile.domain.model.valueobjects.ProfileType;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -40,6 +42,7 @@ class UserProfileTest {
                 new CognitoSubject("7458e448-6051-7081-2745-186f682d626c"),
                 ProfileType.DOCTOR,
                 ProfileStatus.ACTIVE,
+                personalDetails(),
                 CREATED_AT,
                 updatedAt);
 
@@ -57,6 +60,7 @@ class UserProfileTest {
                         PATIENT_SUBJECT,
                         ProfileType.PATIENT,
                         ProfileStatus.PENDING_COMPLETION,
+                        null,
                         CREATED_AT,
                         CREATED_AT.minusSeconds(1)));
     }
@@ -72,5 +76,48 @@ class UserProfileTest {
         assertThrows(
                 NullPointerException.class,
                 () -> UserProfile.registerInvitedPatient(PROFILE_ID, PATIENT_SUBJECT, null));
+    }
+
+    @Test
+    void shouldCompleteAnInvitedPatientProfile() {
+        var profile = UserProfile.registerInvitedPatient(PROFILE_ID, PATIENT_SUBJECT, CREATED_AT);
+        var details = personalDetails();
+        var completedAt = CREATED_AT.plusSeconds(60);
+
+        profile.complete(details, completedAt);
+
+        assertEquals(ProfileStatus.ACTIVE, profile.status());
+        assertEquals(details, profile.personalDetails().orElseThrow());
+        assertEquals(completedAt, profile.updatedAt());
+    }
+
+    @Test
+    void shouldKeepAnIdenticalCompletionIdempotent() {
+        var profile = UserProfile.registerInvitedPatient(PROFILE_ID, PATIENT_SUBJECT, CREATED_AT);
+        var details = personalDetails();
+        var completedAt = CREATED_AT.plusSeconds(60);
+        profile.complete(details, completedAt);
+
+        profile.complete(details, completedAt.plusSeconds(60));
+
+        assertEquals(completedAt, profile.updatedAt());
+    }
+
+    @Test
+    void shouldRejectCompletionBeforeTheLastUpdate() {
+        var profile = UserProfile.registerInvitedPatient(PROFILE_ID, PATIENT_SUBJECT, CREATED_AT);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> profile.complete(personalDetails(), CREATED_AT.minusSeconds(1)));
+    }
+
+    private static PersonalDetails personalDetails() {
+        return new PersonalDetails(
+                "Andrea",
+                "Salazar",
+                "74859621",
+                LocalDate.of(1998, 4, 12),
+                "+51 987 654 321");
     }
 }

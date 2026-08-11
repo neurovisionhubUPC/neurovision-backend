@@ -3,6 +3,7 @@ package com.neurovision.rehab.profile.infrastructure.persistence.jpa.entities;
 import com.neurovision.rehab.profile.domain.model.aggregates.UserProfile;
 import com.neurovision.rehab.profile.domain.model.valueobjects.CognitoSubject;
 import com.neurovision.rehab.profile.domain.model.valueobjects.ProfileId;
+import com.neurovision.rehab.profile.domain.model.valueobjects.PersonalDetails;
 import com.neurovision.rehab.profile.domain.model.valueobjects.ProfileStatus;
 import com.neurovision.rehab.profile.domain.model.valueobjects.ProfileType;
 import jakarta.persistence.Column;
@@ -11,6 +12,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 @Entity
@@ -29,6 +31,21 @@ public class UserProfileEntity {
 
     @Column(name = "status", nullable = false, length = 32)
     private String status;
+
+    @Column(name = "first_name", length = 100)
+    private String firstName;
+
+    @Column(name = "last_name", length = 100)
+    private String lastName;
+
+    @Column(name = "document_number", length = 32)
+    private String documentNumber;
+
+    @Column(name = "birth_date")
+    private LocalDate birthDate;
+
+    @Column(name = "phone", length = 20)
+    private String phone;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -63,6 +80,21 @@ public class UserProfileEntity {
             throw new IllegalArgumentException("Cannot change the profile type");
         }
         status = profile.status().name();
+        profile.personalDetails().ifPresentOrElse(
+                details -> {
+                    firstName = details.firstName();
+                    lastName = details.lastName();
+                    documentNumber = details.documentNumber();
+                    birthDate = details.birthDate();
+                    phone = details.phone();
+                },
+                () -> {
+                    firstName = null;
+                    lastName = null;
+                    documentNumber = null;
+                    birthDate = null;
+                    phone = null;
+                });
         updatedAt = profile.updatedAt();
     }
 
@@ -72,7 +104,15 @@ public class UserProfileEntity {
                 new CognitoSubject(cognitoSubject),
                 ProfileType.valueOf(profileType),
                 ProfileStatus.valueOf(status),
+                personalDetails(),
                 createdAt,
                 updatedAt);
+    }
+
+    private PersonalDetails personalDetails() {
+        if (firstName == null) {
+            return null;
+        }
+        return new PersonalDetails(firstName, lastName, documentNumber, birthDate, phone);
     }
 }
