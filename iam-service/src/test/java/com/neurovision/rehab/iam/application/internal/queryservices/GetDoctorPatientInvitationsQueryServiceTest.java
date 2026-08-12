@@ -70,6 +70,11 @@ class GetDoctorPatientInvitationsQueryServiceTest {
         }
 
         @Override
+        public Optional<PatientInvitation> findByPatientSubject(CognitoSubject patientSubject) {
+            return Optional.empty();
+        }
+
+        @Override
         public void save(PatientInvitation invitation) {}
 
         @Override

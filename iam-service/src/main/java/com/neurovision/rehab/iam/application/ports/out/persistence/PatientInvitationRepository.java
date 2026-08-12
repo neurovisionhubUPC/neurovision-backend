@@ -16,6 +16,8 @@ public interface PatientInvitationRepository {
 
     Optional<PatientInvitation> findById(InvitationId invitationId);
 
+    Optional<PatientInvitation> findByPatientSubject(CognitoSubject patientSubject);
+
     PatientInvitationPage findByDoctor(
             CognitoSubject doctorSubject, int page, int size, InvitationStatus status);
 

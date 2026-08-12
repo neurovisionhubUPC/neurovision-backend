@@ -10,12 +10,15 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.neurovision.rehab.iam.application.internal.commandservices.InvitePatientCommandService;
+import com.neurovision.rehab.iam.application.internal.commandservices.ActivatePatientInvitationCommandService;
+import com.neurovision.rehab.iam.application.internal.commandservices.PatientInvitationNotFoundException;
 import com.neurovision.rehab.iam.application.internal.commandservices.PatientAlreadyInvitedException;
 import com.neurovision.rehab.iam.application.internal.commandservices.PatientInvitationProvisioningException;
 import com.neurovision.rehab.iam.application.internal.queryservices.GetDoctorPatientInvitationsQueryService;
 import com.neurovision.rehab.iam.application.internal.queryservices.PatientInvitationPage;
 import com.neurovision.rehab.iam.domain.model.aggregates.PatientInvitation;
 import com.neurovision.rehab.iam.domain.model.commands.InvitePatientCommand;
+import com.neurovision.rehab.iam.domain.model.commands.ActivatePatientInvitationCommand;
 import com.neurovision.rehab.iam.domain.model.valueobjects.CognitoSubject;
 import com.neurovision.rehab.iam.domain.model.valueobjects.EmailAddress;
 import com.neurovision.rehab.iam.domain.model.valueobjects.InvitationId;
@@ -25,6 +28,7 @@ import io.quarkus.test.security.TestSecurity;
 import io.quarkus.test.security.oidc.Claim;
 import io.quarkus.test.security.oidc.OidcSecurity;
 import java.time.Instant;
+import jakarta.json.Json;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,16 +40,20 @@ class PatientInvitationResourceTest {
 
     private static final String ENDPOINT = "/api/v1/patient-invitations";
     private static final String DOCTOR_SUBJECT = "doctor-cognito-sub";
+    private static final String PATIENT_SUBJECT = "patient-cognito-sub";
 
     @InjectMock
     InvitePatientCommandService commandService;
+
+    @InjectMock
+    ActivatePatientInvitationCommandService activationService;
 
     @InjectMock
     GetDoctorPatientInvitationsQueryService queryService;
 
     @BeforeEach
     void resetCommandService() {
-        reset(commandService, queryService);
+        reset(commandService, activationService, queryService);
     }
 
     @Test
@@ -75,6 +83,72 @@ class PatientInvitationResourceTest {
                 "patient@example.com", command.getValue().patientEmail().value());
         org.junit.jupiter.api.Assertions.assertEquals(
                 DOCTOR_SUBJECT, command.getValue().invitedByDoctor().value());
+    }
+
+    @Test
+    void shouldReadNativeJsonNumberAuthenticationTime() {
+        org.junit.jupiter.api.Assertions.assertEquals(
+                Instant.parse("2026-08-11T15:00:00Z"),
+                PatientInvitationResource.toAuthenticationTime(Json.createValue(1786460400L)));
+    }
+
+    @Test
+    @TestSecurity(user = "patient", roles = "PATIENT")
+    @OidcSecurity(claims = {
+        @Claim(key = "sub", value = PATIENT_SUBJECT),
+        @Claim(key = "auth_time", value = "1786460400")
+    })
+    void shouldActivateInvitationFromVerifiedCognitoAuthentication() {
+        var invitation = activatedInvitation();
+        when(activationService.handle(any())).thenReturn(invitation);
+
+        given()
+                .when()
+                .put(ENDPOINT + "/me/activation")
+                .then()
+                .statusCode(200)
+                .body("status", equalTo("ACTIVATED"))
+                .body("activatedAt", equalTo("2026-08-11T15:00:00Z"));
+
+        var command = ArgumentCaptor.forClass(ActivatePatientInvitationCommand.class);
+        verify(activationService).handle(command.capture());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                PATIENT_SUBJECT, command.getValue().patientSubject().value());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                Instant.parse("2026-08-11T15:00:00Z"), command.getValue().authenticatedAt());
+    }
+
+    @Test
+    @TestSecurity(user = "patient", roles = "PATIENT")
+    @OidcSecurity(claims = {
+        @Claim(key = "sub", value = PATIENT_SUBJECT),
+        @Claim(key = "auth_time", value = "1786460400")
+    })
+    void shouldReturnNotFoundWhenPatientWasNotInvited() {
+        when(activationService.handle(any())).thenThrow(new PatientInvitationNotFoundException());
+
+        given()
+                .when()
+                .put(ENDPOINT + "/me/activation")
+                .then()
+                .statusCode(404)
+                .body("code", equalTo("PATIENT_INVITATION_NOT_FOUND"));
+    }
+
+    @Test
+    @TestSecurity(user = "doctor", roles = "DOCTOR")
+    @OidcSecurity(claims = {
+        @Claim(key = "sub", value = DOCTOR_SUBJECT),
+        @Claim(key = "auth_time", value = "1786460400")
+    })
+    void shouldForbidDoctorFromActivatingPatientInvitation() {
+        given()
+                .when()
+                .put(ENDPOINT + "/me/activation")
+                .then()
+                .statusCode(403);
+
+        verifyNoInteractions(activationService);
     }
 
     @Test
@@ -239,6 +313,12 @@ class PatientInvitationResourceTest {
         invitation.markInvited(
                 new CognitoSubject("patient-cognito-sub"),
                 Instant.parse("2026-08-10T15:00:01Z"));
+        return invitation;
+    }
+
+    private static PatientInvitation activatedInvitation() {
+        var invitation = invitedInvitation();
+        invitation.markActivated(Instant.parse("2026-08-11T15:00:00Z"));
         return invitation;
     }
 

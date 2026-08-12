@@ -96,6 +96,34 @@ class JpaPatientInvitationRepositoryTest {
     }
 
     @Test
+    void shouldFindAndPersistActivationByPatientSubject() {
+        var invitation = pendingInvitation(
+                UUID.fromString("55555555-5555-5555-5555-555555555555"),
+                "activated@example.com");
+        invitation.markInvited(
+                new CognitoSubject("activated-patient-sub"), CREATED_AT.plusSeconds(30));
+        invitation.pullDomainEvents();
+        repository.save(invitation);
+
+        var restored = repository
+                .findByPatientSubject(new CognitoSubject("activated-patient-sub"))
+                .orElseThrow();
+        var activatedAt = CREATED_AT.plusSeconds(60);
+        restored.markActivated(activatedAt);
+        repository.save(restored);
+
+        var activated = QuarkusTransaction.requiringNew().call(() -> {
+            invitationEntities.getEntityManager().clear();
+            return repository.findById(invitation.id()).orElseThrow();
+        });
+        assertEquals(InvitationStatus.ACTIVATED, activated.status());
+        assertEquals(activatedAt, activated.activatedAt().orElseThrow());
+        assertTrue(repository
+                .findByPatientSubject(new CognitoSubject("unknown-patient-sub"))
+                .isEmpty());
+    }
+
+    @Test
     void shouldEnforceOnlyOneActiveInvitationPerPatientEmail() {
         var first = pendingInvitation(
                 UUID.fromString("33333333-3333-3333-3333-333333333333"),

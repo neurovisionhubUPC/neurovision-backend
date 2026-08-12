@@ -29,4 +29,13 @@ class IamServiceIT {
                 .then()
                 .statusCode(401);
     }
+
+    @Test
+    void shouldRejectAnonymousPatientActivation() {
+        given()
+                .when()
+                .put("/api/v1/patient-invitations/me/activation")
+                .then()
+                .statusCode(401);
+    }
 }

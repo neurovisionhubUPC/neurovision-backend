@@ -52,6 +52,15 @@ public class JpaPatientInvitationRepository implements PatientInvitationReposito
 
     @Override
     @Transactional(Transactional.TxType.SUPPORTS)
+    public Optional<PatientInvitation> findByPatientSubject(CognitoSubject patientSubject) {
+        Objects.requireNonNull(patientSubject, "Patient subject must not be null");
+        return invitationEntities
+                .findByPatientSubject(patientSubject.value())
+                .map(PatientInvitationEntity::toDomain);
+    }
+
+    @Override
+    @Transactional(Transactional.TxType.SUPPORTS)
     public PatientInvitationPage findByDoctor(
             CognitoSubject doctorSubject, int page, int size, InvitationStatus status) {
         Objects.requireNonNull(doctorSubject, "Doctor subject must not be null");

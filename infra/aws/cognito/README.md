@@ -280,6 +280,15 @@ PostgreSQL and Kafka remain local and are started by Quarkus Dev Services. The C
   -IamServiceBaseUrl "http://localhost:8080"
 ```
 
-The script generates an ephemeral PKCE verifier, opens Cognito Managed Login, listens once on the registered `http://localhost:5173/auth/callback`, exchanges the authorization code without printing tokens, and invokes `POST /api/v1/patient-invitations`. Use only controlled synthetic email addresses.
+The script generates an ephemeral PKCE verifier, opens Cognito Managed Login, listens once on the registered `http://localhost:5173/auth/callback`, and exchanges the authorization code without printing tokens. By default it invokes `POST /api/v1/patient-invitations`. Use only controlled synthetic email addresses.
+
+To verify patient activation, sign in as an already invited patient and run:
+
+```powershell
+.\infra\aws\cognito\smoke-test-patient-invitation.ps1 `
+  -Operation ActivateCurrentPatient
+```
+
+This invokes the idempotent `PUT /api/v1/patient-invitations/me/activation` endpoint. IAM validates the Cognito access token, requires the `PATIENT` group, identifies the invitation through `sub`, and records Cognito's verified `auth_time` as `activatedAt`. The React callback must invoke the same endpoint after exchanging its authorization code. Token refreshes do not change the original activation time.
 
 This script is not an application login endpoint. The React SPA will own the same Authorization Code + PKCE redirect flow; `iam-service` remains a bearer-token resource server and never receives user passwords.

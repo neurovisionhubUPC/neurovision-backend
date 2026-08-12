@@ -107,6 +107,11 @@ class InvitePatientCommandServiceTest {
         }
 
         @Override
+        public Optional<PatientInvitation> findByPatientSubject(CognitoSubject patientSubject) {
+            return Optional.empty();
+        }
+
+        @Override
         public PatientInvitationPage findByDoctor(
                 CognitoSubject doctorSubject, int page, int size, InvitationStatus status) {
             return new PatientInvitationPage(List.of(), page, size, 0, 0);

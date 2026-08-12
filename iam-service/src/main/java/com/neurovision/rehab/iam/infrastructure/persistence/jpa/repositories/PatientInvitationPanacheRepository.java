@@ -18,6 +18,10 @@ public class PatientInvitationPanacheRepository
                 > 0;
     }
 
+    public java.util.Optional<PatientInvitationEntity> findByPatientSubject(String patientSubject) {
+        return find("patientCognitoSub", patientSubject).firstResultOptional();
+    }
+
     public io.quarkus.hibernate.orm.panache.PanacheQuery<PatientInvitationEntity> findByDoctor(
             String doctorSubject, String status, int page, int size) {
         var sort = Sort.descending("createdAt").and("id");

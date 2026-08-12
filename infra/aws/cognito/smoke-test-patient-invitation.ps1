@@ -1,7 +1,7 @@
 [CmdletBinding()]
 <#
 .SYNOPSIS
-Runs the real Cognito PKCE and patient-invitation smoke test against a reachable IAM service.
+Runs a real Cognito PKCE IAM smoke test against a reachable IAM service.
 
 .EXAMPLE
 ./infra/aws/cognito/smoke-test-patient-invitation.ps1 `
@@ -18,6 +18,8 @@ Uses iam-service running directly in Quarkus Dev Mode. PostgreSQL and Kafka can 
 provided by Quarkus Dev Services; Cognito remains the real AWS development pool.
 #>
 param(
+    [ValidateSet("InvitePatient", "ActivateCurrentPatient")]
+    [string] $Operation = "InvitePatient",
     [string] $PatientEmail = "u202114714@upc.edu.pe",
     [string] $StackName = "neurovision-dev-cognito",
     [string] $AwsProfile = "neurovision-personal",
@@ -44,6 +46,20 @@ function New-RandomBase64Url([int] $ByteCount) {
     return ConvertTo-Base64Url $bytes
 }
 
+function ConvertFrom-JwtPayload([string] $Token) {
+    $segments = $Token.Split(".")
+    if ($segments.Count -ne 3) {
+        throw "Cognito returned a malformed access token."
+    }
+    $payload = $segments[1].Replace("-", "+").Replace("_", "/")
+    switch ($payload.Length % 4) {
+        2 { $payload += "==" }
+        3 { $payload += "=" }
+    }
+    return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) |
+        ConvertFrom-Json
+}
+
 function Get-StackOutput([string] $OutputKey) {
     $value = aws cloudformation describe-stacks `
         --stack-name $StackName `
@@ -59,12 +75,18 @@ function Get-StackOutput([string] $OutputKey) {
 }
 
 $invitationEndpoint = "$IamServiceBaseUrl/api/v1/patient-invitations"
+$activationEndpoint = "$invitationEndpoint/me/activation"
+$preflightEndpoint = if ($Operation -eq "ActivateCurrentPatient") {
+    $activationEndpoint
+} else {
+    $invitationEndpoint
+}
 $preflightStatus = $null
 try {
     $preflightResponse = Invoke-WebRequest `
         -UseBasicParsing `
         -Method Get `
-        -Uri $invitationEndpoint `
+        -Uri $preflightEndpoint `
         -TimeoutSec 5
     $preflightStatus = [int] $preflightResponse.StatusCode
 } catch {
@@ -76,7 +98,7 @@ try {
 }
 
 if ($preflightStatus -notin @(401, 405)) {
-    throw "Unexpected IAM preflight status $preflightStatus at $invitationEndpoint."
+    throw "Unexpected IAM preflight status $preflightStatus at $preflightEndpoint."
 }
 
 $clientId = Get-StackOutput "UserPoolClientId"
@@ -101,6 +123,7 @@ $authorizationParameters = [ordered]@{
     state = $state
     code_challenge = $codeChallenge
     code_challenge_method = "S256"
+    prompt = "login"
 }
 $query = ($authorizationParameters.GetEnumerator() | ForEach-Object {
     "{0}={1}" -f [Uri]::EscapeDataString($_.Key), [Uri]::EscapeDataString($_.Value)
@@ -112,7 +135,7 @@ $listener.Prefixes.Add($listenerPrefix)
 $listener.Start()
 
 try {
-    Write-Host "Opening Cognito Managed Login. Complete the temporary-password challenge in the browser."
+    Write-Host "Opening Cognito Managed Login. Complete authentication in the browser."
     Start-Process $authorizationUrl
 
     $callbackTask = $listener.GetContextAsync()
@@ -155,15 +178,35 @@ try {
             code_verifier = $codeVerifier
         }
 
-    $invitation = Invoke-RestMethod `
-        -Method Post `
-        -Uri $invitationEndpoint `
-        -ContentType "application/json" `
-        -Headers @{ Authorization = "Bearer $($tokens.access_token)" } `
-        -Body (@{ patientEmail = $PatientEmail } | ConvertTo-Json -Compress)
+    $accessTokenClaims = ConvertFrom-JwtPayload $tokens.access_token
 
-    Write-Host "Smoke test passed: Cognito authenticated the doctor and iam-service created the patient invitation."
-    $invitation
+    if ($Operation -eq "ActivateCurrentPatient") {
+        $groups = @($accessTokenClaims.'cognito:groups')
+        if ($groups -notcontains "PATIENT") {
+            throw "The authenticated Cognito account is not in the PATIENT group. Groups: $($groups -join ', ')."
+        }
+        if ($null -eq $accessTokenClaims.auth_time) {
+            throw "The Cognito access token does not contain auth_time."
+        }
+        Write-Host "Validated Cognito access token: group=PATIENT, auth_time=$($accessTokenClaims.auth_time)."
+        $activation = Invoke-RestMethod `
+            -Method Put `
+            -Uri $activationEndpoint `
+            -Headers @{ Authorization = "Bearer $($tokens.access_token)" }
+
+        Write-Host "Smoke test passed: Cognito authenticated the patient and iam-service recorded account activation."
+        $activation
+    } else {
+        $invitation = Invoke-RestMethod `
+            -Method Post `
+            -Uri $invitationEndpoint `
+            -ContentType "application/json" `
+            -Headers @{ Authorization = "Bearer $($tokens.access_token)" } `
+            -Body (@{ patientEmail = $PatientEmail } | ConvertTo-Json -Compress)
+
+        Write-Host "Smoke test passed: Cognito authenticated the doctor and iam-service created the patient invitation."
+        $invitation
+    }
 } finally {
     if ($listener.IsListening) {
         $listener.Stop()
