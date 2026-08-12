@@ -21,7 +21,8 @@ import org.junit.jupiter.api.Test;
 @QuarkusTest
 class KafkaOutboxEventPublisherIntegrationTest {
 
-    private static final String TOPIC = "patient-account-invited.v1";
+    private static final String PATIENT_TOPIC = "patient-account-invited.v1";
+    private static final String DOCTOR_TOPIC = "doctor-account-invited.v1";
 
     @Inject
     KafkaOutboxEventPublisher publisher;
@@ -46,14 +47,44 @@ class KafkaOutboxEventPublisherIntegrationTest {
                 1);
 
         try (var consumer = new KafkaConsumer<String, String>(consumerProperties())) {
-            consumer.subscribe(List.of(TOPIC));
+            consumer.subscribe(List.of(PATIENT_TOPIC));
             consumer.poll(Duration.ofSeconds(1));
 
             publisher.publish(event);
 
             var records = consumer.poll(Duration.ofSeconds(10));
             assertFalse(records.isEmpty());
-            var record = records.records(TOPIC).iterator().next();
+            var record = records.records(PATIENT_TOPIC).iterator().next();
+            assertEquals(aggregateId.toString(), record.key());
+            assertEquals(payload.toString(), record.value());
+        }
+    }
+
+    @Test
+    void shouldDeliverDoctorAccountInvitedToKafka() {
+        var aggregateId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var eventId = UUID.randomUUID();
+        var payload = new ObjectMapper().createObjectNode()
+                .put("eventId", eventId.toString())
+                .put("doctorSubject", "doctor-sub");
+        var event = new ClaimedOutboxEvent(
+                eventId,
+                aggregateId,
+                "DoctorAccountInvited",
+                (short) 1,
+                payload,
+                Instant.parse("2026-08-11T15:00:00Z"),
+                1);
+
+        try (var consumer = new KafkaConsumer<String, String>(consumerProperties())) {
+            consumer.subscribe(List.of(DOCTOR_TOPIC));
+            consumer.poll(Duration.ofSeconds(1));
+
+            publisher.publish(event);
+
+            var records = consumer.poll(Duration.ofSeconds(10));
+            assertFalse(records.isEmpty());
+            var record = records.records(DOCTOR_TOPIC).iterator().next();
             assertEquals(aggregateId.toString(), record.key());
             assertEquals(payload.toString(), record.value());
         }

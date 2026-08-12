@@ -11,21 +11,34 @@ import org.eclipse.microprofile.reactive.messaging.Emitter;
 @ApplicationScoped
 public class KafkaOutboxEventPublisher implements OutboxEventPublisher {
 
-    private final Emitter<Record<String, String>> emitter;
+    private final Emitter<Record<String, String>> patientEmitter;
+    private final Emitter<Record<String, String>> doctorEmitter;
 
     @Inject
     public KafkaOutboxEventPublisher(
-            @Channel("patient-account-invited") Emitter<Record<String, String>> emitter) {
-        this.emitter = emitter;
+            @Channel("patient-account-invited") Emitter<Record<String, String>> patientEmitter,
+            @Channel("doctor-account-invited") Emitter<Record<String, String>> doctorEmitter) {
+        this.patientEmitter = patientEmitter;
+        this.doctorEmitter = doctorEmitter;
     }
 
     @Override
     public void publish(ClaimedOutboxEvent event) {
-        if (!"PatientAccountInvited".equals(event.eventType()) || event.eventVersion() != 1) {
+        if (event.eventVersion() != 1) {
             throw new IllegalArgumentException(
                     "Unsupported outbox event: %s v%s".formatted(event.eventType(), event.eventVersion()));
         }
         var record = Record.of(event.aggregateId().toString(), event.payload().toString());
-        emitter.send(record).toCompletableFuture().join();
+        emitterFor(event).send(record).toCompletableFuture().join();
+    }
+
+    private Emitter<Record<String, String>> emitterFor(ClaimedOutboxEvent event) {
+        return switch (event.eventType()) {
+            case "PatientAccountInvited" -> patientEmitter;
+            case "DoctorAccountInvited" -> doctorEmitter;
+            default -> throw new IllegalArgumentException(
+                    "Unsupported outbox event: %s v%s"
+                            .formatted(event.eventType(), event.eventVersion()));
+        };
     }
 }

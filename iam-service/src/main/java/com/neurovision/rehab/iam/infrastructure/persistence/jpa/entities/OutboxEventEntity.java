@@ -2,6 +2,7 @@ package com.neurovision.rehab.iam.infrastructure.persistence.jpa.entities;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.neurovision.rehab.iam.application.ports.out.messaging.DoctorAccountInvitedV1;
 import com.neurovision.rehab.iam.application.ports.out.messaging.PatientAccountInvitedV1;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -75,6 +76,23 @@ public class OutboxEventEntity {
                 .put("invitationId", event.invitationId().toString())
                 .put("invitedByDoctor", event.invitedByDoctor())
                 .put("patientSubject", event.patientSubject())
+                .put("occurredAt", event.occurredAt().toString());
+        return entity;
+    }
+
+    public static OutboxEventEntity from(DoctorAccountInvitedV1 event, ObjectMapper objectMapper) {
+        var entity = new OutboxEventEntity();
+        entity.id = event.eventId();
+        entity.aggregateType = "DoctorInvitation";
+        entity.aggregateId = event.invitationId();
+        entity.eventType = "DoctorAccountInvited";
+        entity.eventVersion = 1;
+        entity.occurredAt = event.occurredAt();
+        entity.payload = objectMapper.createObjectNode()
+                .put("eventId", event.eventId().toString())
+                .put("invitationId", event.invitationId().toString())
+                .put("invitedByAdministrator", event.invitedByAdministrator())
+                .put("doctorSubject", event.doctorSubject())
                 .put("occurredAt", event.occurredAt().toString());
         return entity;
     }

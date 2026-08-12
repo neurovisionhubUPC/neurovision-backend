@@ -191,7 +191,7 @@ Resources:
                   - cognito-idp:AdminCreateUser
                   - cognito-idp:AdminAddUserToGroup
                   - cognito-idp:AdminGetUser
-                  # Used only to compensate an incomplete patient-provisioning workflow.
+                  # Used only to compensate an incomplete patient or doctor provisioning workflow.
                   - cognito-idp:AdminDeleteUser
                 Resource: !GetAtt UserPool.Arn
 
