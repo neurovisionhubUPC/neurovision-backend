@@ -18,7 +18,7 @@ Set the local values and resolve the developer identity from the configured prof
 ```powershell
 $AwsRegion = "us-east-1"
 $StackName = "neurovision-dev-cognito"
-$WebCallbackUrls = "http://localhost:5173/auth/callback"
+$WebCallbackUrls = "http://localhost:5173/auth/callback,http://localhost:8081/q/swagger-ui/oauth2-redirect.html,http://localhost:8082/q/swagger-ui/oauth2-redirect.html,http://localhost:8083/q/swagger-ui/oauth2-redirect.html"
 $WebLogoutUrls = "http://localhost:5173/"
 $DeveloperPrincipalArn = aws sts get-caller-identity `
   --profile neurovision-personal `
@@ -59,6 +59,16 @@ The development React application uses these fixed URLs:
 | Web origin | `http://localhost:5173` |
 | OAuth callback | `http://localhost:5173/auth/callback` |
 | Post-logout redirect | `http://localhost:5173/` |
+
+The development stack also permits the OAuth callbacks used by the three local Swagger UI instances:
+
+| Service | Swagger OAuth callback |
+| --- | --- |
+| IAM | `http://localhost:8081/q/swagger-ui/oauth2-redirect.html` |
+| Profile | `http://localhost:8082/q/swagger-ui/oauth2-redirect.html` |
+| Clinical | `http://localhost:8083/q/swagger-ui/oauth2-redirect.html` |
+
+These localhost callbacks are development-only. A production stack must receive only the deployed React application's HTTPS callback URL.
 
 Configure Vite with `server.port: 5173` and `server.strictPort: true`. Cognito requires the callback URL to match an allowed value, so Vite must not silently switch to another port.
 
@@ -171,7 +181,45 @@ aws cognito-idp list-groups `
   --output table
 ```
 
-The result must contain `DOCTOR` and `PATIENT`.
+The result must contain `ADMIN`, `DOCTOR`, and `PATIENT`.
+
+## Bootstrap the first administrator
+
+The doctor-invitation API requires an `ADMIN` access token, so one administrator
+must be established before that API can replace manual Cognito operations. Use the
+versioned bootstrap script once with an email address you control:
+
+```powershell
+.\infra\aws\cognito\bootstrap-admin.ps1 `
+  -AdminEmail "controlled-admin@example.com"
+```
+
+Cognito sends a generated temporary password to that address and requires a new
+password during the first managed-login session. The script never receives, prints,
+or stores either password.
+
+Preview the operation without creating or elevating a user:
+
+```powershell
+.\infra\aws\cognito\bootstrap-admin.ps1 `
+  -AdminEmail "controlled-admin@example.com" `
+  -WhatIf
+```
+
+The operation is idempotent when the email already belongs to `ADMIN`. If the email
+belongs to an existing user without that group, the script fails closed. Elevate that
+identity only after verifying it intentionally:
+
+```powershell
+.\infra\aws\cognito\bootstrap-admin.ps1 `
+  -AdminEmail "verified-existing-user@example.com" `
+  -AllowExistingUser
+```
+
+The bootstrap uses `neurovision-personal` by default and rejects root and assumed-role
+sessions. It is an initial trust operation, not an application runtime responsibility.
+After the doctor-invitation endpoint is available, routine doctor provisioning must use
+the API rather than this administrative profile.
 
 ## CloudShell alternative
 
@@ -181,7 +229,7 @@ CloudShell can deploy the same template after it is uploaded. Resolve a persiste
 export AWS_REGION=us-east-1
 export STACK_NAME=neurovision-dev-cognito
 export DEVELOPER_PRINCIPAL_ARN='arn:aws:iam::<account-id>:user/<developer-user>'
-export WEB_CALLBACK_URLS='http://localhost:5173/auth/callback'
+export WEB_CALLBACK_URLS='http://localhost:5173/auth/callback,http://localhost:8081/q/swagger-ui/oauth2-redirect.html,http://localhost:8082/q/swagger-ui/oauth2-redirect.html,http://localhost:8083/q/swagger-ui/oauth2-redirect.html'
 export WEB_LOGOUT_URLS='http://localhost:5173/'
 
 aws cloudformation deploy \

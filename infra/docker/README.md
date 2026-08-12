@@ -95,6 +95,8 @@ The machine running Compose does not need k3d. If k3d is also running, consider 
 
 The Maven `compose` profile embeds Swagger UI at build time. Normal native builds that omit `-Pcompose` do not embed it, so Kubernetes artifacts remain unaffected.
 
+The same profile enables Authorization Code with PKCE for Swagger UI. Choose the `authorization_code` entry, enter the public Cognito App Client ID, leave `client_secret` empty, and request `openid`, `email`, and `profile`. The `implicit` entry discovered from Cognito must not be used.
+
 ## Cognito smoke test
 
 Point the existing smoke script directly at IAM:

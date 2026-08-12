@@ -23,8 +23,12 @@ Parameters:
   # These are OAuth redirect URLs; REST API CORS origins are configured separately at the Ingress/API layer.
   WebCallbackUrls:
     Type: CommaDelimitedList
-    Default: "http://localhost:5173/auth/callback"
-    Description: Allowed OAuth callback URLs for the React web application.
+    Default: >-
+      http://localhost:5173/auth/callback,
+      http://localhost:8081/q/swagger-ui/oauth2-redirect.html,
+      http://localhost:8082/q/swagger-ui/oauth2-redirect.html,
+      http://localhost:8083/q/swagger-ui/oauth2-redirect.html
+    Description: Allowed OAuth callback URLs for the React web application and local development tools.
 
   # Add the deployed web application's post-logout URL through this parameter.
   # Example: https://app.example.com/
@@ -142,6 +146,13 @@ Resources:
       UserPoolId: !Ref UserPool
       ClientId: !Ref WebAppClient
       UseCognitoProvidedValues: true
+
+  AdministratorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: ADMIN
+      Description: Institutional administrators authorized to invite medical professionals.
+      UserPoolId: !Ref UserPool
 
   DoctorGroup:
     Type: AWS::Cognito::UserPoolGroup

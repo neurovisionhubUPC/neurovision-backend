@@ -109,6 +109,8 @@
             <properties>
                 <!-- Swagger UI is embedded only in artifacts intentionally built for local Compose. -->
                 <quarkus.swagger-ui.always-include>true</quarkus.swagger-ui.always-include>
+                <!-- The public Cognito client uses Authorization Code with PKCE and no client secret. -->
+                <quarkus.swagger-ui.oauth-use-pkce-with-authorization-code-grant>true</quarkus.swagger-ui.oauth-use-pkce-with-authorization-code-grant>
             </properties>
         </profile>
         <profile>
