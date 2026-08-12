@@ -105,6 +105,13 @@
 
     <profiles>
         <profile>
+            <id>compose</id>
+            <properties>
+                <!-- Swagger UI is embedded only in artifacts intentionally built for local Compose. -->
+                <quarkus.swagger-ui.always-include>true</quarkus.swagger-ui.always-include>
+            </properties>
+        </profile>
+        <profile>
             <id>native</id>
             <activation>
                 <property>

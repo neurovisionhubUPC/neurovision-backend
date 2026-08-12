@@ -1,0 +1,179 @@
+name: neurovision-rehab
+
+services:
+  iam-postgresql:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: neurovision_iam
+      POSTGRES_USER: neurovision_iam
+      POSTGRES_PASSWORD: ${IAM_DB_PASSWORD}
+    volumes:
+      - iam-postgresql-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [neurovision]
+
+  profile-postgresql:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: neurovision_profile
+      POSTGRES_USER: neurovision_profile
+      POSTGRES_PASSWORD: ${PROFILE_DB_PASSWORD}
+    volumes:
+      - profile-postgresql-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [neurovision]
+
+  clinical-postgresql:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: neurovision_clinical
+      POSTGRES_USER: neurovision_clinical
+      POSTGRES_PASSWORD: ${CLINICAL_DB_PASSWORD}
+    volumes:
+      - clinical-postgresql-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [neurovision]
+
+  kafka:
+    image: apache/kafka:4.3.1
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms384m -Xmx384m
+    ports:
+      - "${KAFKA_PORT:-9092}:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+    networks: [neurovision]
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint:
+      - /bin/bash
+      - -ec
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic patient-account-invited.v1 --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic patient-account-invited.v1.dlq --partitions 3 --replication-factor 1
+    restart: "no"
+    networks: [neurovision]
+
+  iam-service:
+    image: neurovision/iam-service:${NEUROVISION_IMAGE_TAG:-compose-native}
+    build:
+      context: ./iam-service
+      dockerfile: src/main/docker/Dockerfile.native-micro
+    environment:
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://iam-postgresql:5432/neurovision_iam
+      QUARKUS_DATASOURCE_USERNAME: neurovision_iam
+      QUARKUS_DATASOURCE_PASSWORD: ${IAM_DB_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID}
+      COGNITO_ISSUER_URL: ${COGNITO_ISSUER_URL}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      HOSTNAME: iam-service-compose
+    ports:
+      - "${IAM_PORT:-8081}:8080"
+    depends_on:
+      iam-postgresql:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [neurovision]
+
+  profile-service:
+    image: neurovision/profile-service:${NEUROVISION_IMAGE_TAG:-compose-native}
+    build:
+      context: ./profile-service
+      dockerfile: src/main/docker/Dockerfile.native-micro
+    environment:
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://profile-postgresql:5432/neurovision_profile
+      QUARKUS_DATASOURCE_USERNAME: neurovision_profile
+      QUARKUS_DATASOURCE_PASSWORD: ${PROFILE_DB_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID}
+      COGNITO_ISSUER_URL: ${COGNITO_ISSUER_URL}
+    ports:
+      - "${PROFILE_PORT:-8082}:8080"
+    depends_on:
+      profile-postgresql:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [neurovision]
+
+  clinical-service:
+    image: neurovision/clinical-service:${NEUROVISION_IMAGE_TAG:-compose-native}
+    build:
+      context: ./clinical-service
+      dockerfile: src/main/docker/Dockerfile.native-micro
+    environment:
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://clinical-postgresql:5432/neurovision_clinical
+      QUARKUS_DATASOURCE_USERNAME: neurovision_clinical
+      QUARKUS_DATASOURCE_PASSWORD: ${CLINICAL_DB_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID}
+      COGNITO_ISSUER_URL: ${COGNITO_ISSUER_URL}
+    ports:
+      - "${CLINICAL_PORT:-8083}:8080"
+    depends_on:
+      clinical-postgresql:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [neurovision]
+
+networks:
+  neurovision:
+    name: neurovision-compose
+
+volumes:
+  iam-postgresql-data:
+  profile-postgresql-data:
+  clinical-postgresql-data:
+  kafka-data:
