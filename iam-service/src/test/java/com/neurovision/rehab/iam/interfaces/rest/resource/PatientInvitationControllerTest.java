@@ -36,7 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 @QuarkusTest
-class PatientInvitationResourceTest {
+class PatientInvitationControllerTest {
 
     private static final String ENDPOINT = "/api/v1/patient-invitations";
     private static final String DOCTOR_SUBJECT = "doctor-cognito-sub";
@@ -89,7 +89,7 @@ class PatientInvitationResourceTest {
     void shouldReadNativeJsonNumberAuthenticationTime() {
         org.junit.jupiter.api.Assertions.assertEquals(
                 Instant.parse("2026-08-11T15:00:00Z"),
-                PatientInvitationResource.toAuthenticationTime(Json.createValue(1786460400L)));
+                PatientInvitationController.toAuthenticationTime(Json.createValue(1786460400L)));
     }
 
     @Test
