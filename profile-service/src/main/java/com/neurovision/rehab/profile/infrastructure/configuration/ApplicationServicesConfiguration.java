@@ -1,6 +1,7 @@
 package com.neurovision.rehab.profile.infrastructure.configuration;
 
 import com.neurovision.rehab.profile.application.internal.commandservices.RegisterInvitedPatientCommandService;
+import com.neurovision.rehab.profile.application.internal.commandservices.RegisterInvitedDoctorCommandService;
 import com.neurovision.rehab.profile.application.internal.commandservices.CompleteCurrentProfileCommandService;
 import com.neurovision.rehab.profile.application.internal.commandservices.OnboardDoctorCommandService;
 import com.neurovision.rehab.profile.application.internal.queryservices.GetCurrentProfileQueryService;
@@ -14,6 +15,14 @@ import java.util.UUID;
 
 @ApplicationScoped
 public class ApplicationServicesConfiguration {
+
+    @Produces
+    @ApplicationScoped
+    RegisterInvitedDoctorCommandService registerInvitedDoctorCommandService(
+            UserProfileRepository profileRepository, InboxEventRepository inboxRepository) {
+        return new RegisterInvitedDoctorCommandService(
+                profileRepository, inboxRepository, UUID::randomUUID, Clock.systemUTC());
+    }
 
     @Produces
     @ApplicationScoped
