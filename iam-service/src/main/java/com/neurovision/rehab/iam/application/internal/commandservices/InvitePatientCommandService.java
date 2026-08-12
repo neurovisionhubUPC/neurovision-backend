@@ -42,7 +42,7 @@ public class InvitePatientCommandService {
         invitationRepository.save(invitation);
 
         final var provisionedIdentity = provisionIdentity(invitation);
-        invitation.markSent(provisionedIdentity.patientSubject(), clock.instant());
+        invitation.markInvited(provisionedIdentity.patientSubject(), clock.instant());
         var outboxEvents = invitation.pullDomainEvents().stream()
                 .map(PatientAccountInvitedV1::from)
                 .toList();

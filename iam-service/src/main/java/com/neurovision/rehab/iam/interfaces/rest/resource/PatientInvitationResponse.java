@@ -9,4 +9,5 @@ public record PatientInvitationResponse(
         String patientSubject,
         String status,
         Instant createdAt,
-        Instant updatedAt) {}
+        Instant updatedAt,
+        Instant activatedAt) {}

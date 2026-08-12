@@ -2,11 +2,14 @@ package com.neurovision.rehab.iam.infrastructure.persistence.jpa.repositories;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.neurovision.rehab.iam.application.internal.commandservices.PatientAlreadyInvitedException;
+import com.neurovision.rehab.iam.application.internal.queryservices.PatientInvitationPage;
 import com.neurovision.rehab.iam.application.ports.out.messaging.PatientAccountInvitedV1;
 import com.neurovision.rehab.iam.application.ports.out.persistence.PatientInvitationRepository;
 import com.neurovision.rehab.iam.domain.model.aggregates.PatientInvitation;
 import com.neurovision.rehab.iam.domain.model.valueobjects.EmailAddress;
+import com.neurovision.rehab.iam.domain.model.valueobjects.CognitoSubject;
 import com.neurovision.rehab.iam.domain.model.valueobjects.InvitationId;
+import com.neurovision.rehab.iam.domain.model.valueobjects.InvitationStatus;
 import com.neurovision.rehab.iam.infrastructure.persistence.jpa.entities.OutboxEventEntity;
 import com.neurovision.rehab.iam.infrastructure.persistence.jpa.entities.PatientInvitationEntity;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -45,6 +48,19 @@ public class JpaPatientInvitationRepository implements PatientInvitationReposito
         Objects.requireNonNull(invitationId, "Invitation ID must not be null");
         return invitationEntities.findByIdOptional(invitationId.value())
                 .map(PatientInvitationEntity::toDomain);
+    }
+
+    @Override
+    @Transactional(Transactional.TxType.SUPPORTS)
+    public PatientInvitationPage findByDoctor(
+            CognitoSubject doctorSubject, int page, int size, InvitationStatus status) {
+        Objects.requireNonNull(doctorSubject, "Doctor subject must not be null");
+        var query = invitationEntities.findByDoctor(
+                doctorSubject.value(), status == null ? null : status.name(), page, size);
+        var items = query.list().stream().map(PatientInvitationEntity::toDomain).toList();
+        var totalElements = query.count();
+        var totalPages = totalElements == 0 ? 0 : (int) Math.ceil((double) totalElements / size);
+        return new PatientInvitationPage(items, page, size, totalElements, totalPages);
     }
 
     @Override

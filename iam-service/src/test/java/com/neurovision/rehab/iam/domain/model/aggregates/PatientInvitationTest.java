@@ -40,9 +40,9 @@ class PatientInvitationTest {
         var patientSubject = new CognitoSubject("d4d1b886-6808-41cf-bc36-0601ef69f7bb");
         var sentAt = CREATED_AT.plusSeconds(30);
 
-        invitation.markSent(patientSubject, sentAt);
+        invitation.markInvited(patientSubject, sentAt);
 
-        assertEquals(InvitationStatus.SENT, invitation.status());
+        assertEquals(InvitationStatus.INVITED, invitation.status());
         assertEquals(patientSubject, invitation.patientSubject().orElseThrow());
         assertEquals(sentAt, invitation.updatedAt());
 
@@ -71,7 +71,7 @@ class PatientInvitationTest {
     @Test
     void shouldRejectASecondTerminalTransition() {
         var invitation = newInvitation();
-        invitation.markSent(
+        invitation.markInvited(
                 new CognitoSubject("d4d1b886-6808-41cf-bc36-0601ef69f7bb"),
                 CREATED_AT.plusSeconds(30));
 
@@ -92,7 +92,7 @@ class PatientInvitationTest {
     }
 
     @Test
-    void shouldRehydrateASentInvitationWithoutRaisingANewEvent() {
+    void shouldRehydrateAnInvitedPatientWithoutRaisingANewEvent() {
         var patientSubject = new CognitoSubject("d4d1b886-6808-41cf-bc36-0601ef69f7bb");
         var sentAt = CREATED_AT.plusSeconds(30);
 
@@ -100,13 +100,14 @@ class PatientInvitationTest {
                 new InvitationId(UUID.fromString("f35da653-f9d6-4a58-8f1d-46900b3bf79c")),
                 DOCTOR_SUBJECT,
                 PATIENT_EMAIL,
-                InvitationStatus.SENT,
+                InvitationStatus.INVITED,
                 patientSubject,
+                null,
                 null,
                 CREATED_AT,
                 sentAt);
 
-        assertEquals(InvitationStatus.SENT, invitation.status());
+        assertEquals(InvitationStatus.INVITED, invitation.status());
         assertEquals(patientSubject, invitation.patientSubject().orElseThrow());
         assertEquals(sentAt, invitation.updatedAt());
         assertTrue(invitation.pullDomainEvents().isEmpty());
@@ -120,11 +121,52 @@ class PatientInvitationTest {
                         new InvitationId(UUID.randomUUID()),
                         DOCTOR_SUBJECT,
                         PATIENT_EMAIL,
-                        InvitationStatus.SENT,
+                        InvitationStatus.INVITED,
+                        null,
                         null,
                         null,
                         CREATED_AT,
                         CREATED_AT));
+    }
+
+    @Test
+    void shouldActivateAnInvitedPatientAccount() {
+        var invitation = newInvitation();
+        invitation.markInvited(
+                new CognitoSubject("d4d1b886-6808-41cf-bc36-0601ef69f7bb"),
+                CREATED_AT.plusSeconds(30));
+        var activatedAt = CREATED_AT.plusSeconds(60);
+
+        invitation.markActivated(activatedAt);
+
+        assertEquals(InvitationStatus.ACTIVATED, invitation.status());
+        assertEquals(activatedAt, invitation.activatedAt().orElseThrow());
+        assertEquals(activatedAt, invitation.updatedAt());
+    }
+
+    @Test
+    void shouldRejectActivationBeforeInvitation() {
+        var invitation = newInvitation();
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> invitation.markActivated(CREATED_AT.plusSeconds(10)));
+    }
+
+    @Test
+    void shouldRejectActivationTimeOutsidePersistedLifecycle() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> PatientInvitation.rehydrate(
+                        new InvitationId(UUID.randomUUID()),
+                        DOCTOR_SUBJECT,
+                        PATIENT_EMAIL,
+                        InvitationStatus.ACTIVATED,
+                        new CognitoSubject("patient-sub"),
+                        null,
+                        CREATED_AT.plusSeconds(61),
+                        CREATED_AT,
+                        CREATED_AT.plusSeconds(60)));
     }
 
     private static PatientInvitation newInvitation() {

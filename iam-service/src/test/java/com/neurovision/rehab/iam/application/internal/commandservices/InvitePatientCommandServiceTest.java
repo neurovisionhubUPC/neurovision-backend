@@ -8,6 +8,7 @@ import com.neurovision.rehab.iam.application.ports.out.identity.PatientIdentityP
 import com.neurovision.rehab.iam.application.ports.out.identity.ProvisionedPatientIdentity;
 import com.neurovision.rehab.iam.application.ports.out.messaging.PatientAccountInvitedV1;
 import com.neurovision.rehab.iam.application.ports.out.persistence.PatientInvitationRepository;
+import com.neurovision.rehab.iam.application.internal.queryservices.PatientInvitationPage;
 import com.neurovision.rehab.iam.domain.model.aggregates.PatientInvitation;
 import com.neurovision.rehab.iam.domain.model.commands.InvitePatientCommand;
 import com.neurovision.rehab.iam.domain.model.valueobjects.CognitoSubject;
@@ -39,9 +40,9 @@ class InvitePatientCommandServiceTest {
 
         PatientInvitation result = service.handle(new InvitePatientCommand(PATIENT_EMAIL, DOCTOR_SUBJECT));
 
-        assertEquals(InvitationStatus.SENT, result.status());
+        assertEquals(InvitationStatus.INVITED, result.status());
         assertEquals(PATIENT_SUBJECT, result.patientSubject().orElseThrow());
-        assertEquals(List.of(InvitationStatus.PENDING, InvitationStatus.SENT), repository.savedStatuses);
+        assertEquals(List.of(InvitationStatus.PENDING, InvitationStatus.INVITED), repository.savedStatuses);
         assertEquals(List.of(PATIENT_EMAIL), identityProvider.requestedEmails);
         assertEquals(1, repository.outboxEvents.size());
         assertEquals(result.id().value(), repository.outboxEvents.getFirst().invitationId());
@@ -103,6 +104,12 @@ class InvitePatientCommandServiceTest {
         @Override
         public Optional<PatientInvitation> findById(InvitationId invitationId) {
             return Optional.empty();
+        }
+
+        @Override
+        public PatientInvitationPage findByDoctor(
+                CognitoSubject doctorSubject, int page, int size, InvitationStatus status) {
+            return new PatientInvitationPage(List.of(), page, size, 0, 0);
         }
 
         @Override

@@ -36,6 +36,9 @@ public class PatientInvitationEntity {
     @Column(name = "failure_code", length = 128)
     private String failureCode;
 
+    @Column(name = "activated_at")
+    private Instant activatedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -65,6 +68,7 @@ public class PatientInvitationEntity {
         patientCognitoSub = invitation.patientSubject().map(CognitoSubject::value).orElse(null);
         status = invitation.status().name();
         failureCode = invitation.failureCode().orElse(null);
+        activatedAt = invitation.activatedAt().orElse(null);
         updatedAt = invitation.updatedAt();
     }
 
@@ -76,6 +80,7 @@ public class PatientInvitationEntity {
                 InvitationStatus.valueOf(status),
                 patientCognitoSub == null ? null : new CognitoSubject(patientCognitoSub),
                 failureCode,
+                activatedAt,
                 createdAt,
                 updatedAt);
     }

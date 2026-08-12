@@ -1,6 +1,7 @@
 package com.neurovision.rehab.iam.infrastructure.configuration;
 
 import com.neurovision.rehab.iam.application.internal.commandservices.InvitePatientCommandService;
+import com.neurovision.rehab.iam.application.internal.queryservices.GetDoctorPatientInvitationsQueryService;
 import com.neurovision.rehab.iam.application.ports.out.identity.PatientIdentityProvider;
 import com.neurovision.rehab.iam.application.ports.out.persistence.PatientInvitationRepository;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -17,5 +18,12 @@ public class ApplicationServicesConfiguration {
             PatientIdentityProvider identityProvider) {
         return new InvitePatientCommandService(
                 invitationRepository, identityProvider, Clock.systemUTC());
+    }
+
+    @Produces
+    @ApplicationScoped
+    GetDoctorPatientInvitationsQueryService getDoctorPatientInvitationsQueryService(
+            PatientInvitationRepository invitationRepository) {
+        return new GetDoctorPatientInvitationsQueryService(invitationRepository);
     }
 }

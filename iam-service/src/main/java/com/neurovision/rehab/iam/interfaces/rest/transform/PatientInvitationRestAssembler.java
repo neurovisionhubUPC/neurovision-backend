@@ -21,9 +21,10 @@ public final class PatientInvitationRestAssembler {
         return new PatientInvitationResponse(
                 invitation.id().value(),
                 invitation.patientEmail().value(),
-                invitation.patientSubject().orElseThrow().value(),
+                invitation.patientSubject().map(CognitoSubject::value).orElse(null),
                 invitation.status().name(),
                 invitation.createdAt(),
-                invitation.updatedAt());
+                invitation.updatedAt(),
+                invitation.activatedAt().orElse(null));
     }
 }

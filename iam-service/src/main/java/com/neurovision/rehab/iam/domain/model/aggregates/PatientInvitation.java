@@ -23,6 +23,7 @@ public final class PatientInvitation {
     private InvitationStatus status;
     private CognitoSubject patientSubject;
     private String failureCode;
+    private Instant activatedAt;
     private Instant updatedAt;
 
     private PatientInvitation(
@@ -53,6 +54,7 @@ public final class PatientInvitation {
             InvitationStatus status,
             CognitoSubject patientSubject,
             String failureCode,
+            Instant activatedAt,
             Instant createdAt,
             Instant updatedAt) {
         Objects.requireNonNull(status, "Invitation status must not be null");
@@ -60,44 +62,58 @@ public final class PatientInvitation {
         if (updatedAt.isBefore(createdAt)) {
             throw new IllegalArgumentException("Update time must not precede creation time");
         }
+        if (activatedAt != null
+                && (activatedAt.isBefore(createdAt) || activatedAt.isAfter(updatedAt))) {
+            throw new IllegalArgumentException(
+                    "Activation time must be between creation and update time");
+        }
 
-        validateRehydratedState(status, patientSubject, failureCode);
+        validateRehydratedState(status, patientSubject, failureCode, activatedAt);
         var invitation = new PatientInvitation(id, invitedByDoctor, patientEmail, createdAt);
         invitation.status = status;
         invitation.patientSubject = patientSubject;
         invitation.failureCode = failureCode == null ? null : failureCode.trim();
+        invitation.activatedAt = activatedAt;
         invitation.updatedAt = updatedAt;
         return invitation;
     }
 
     private static void validateRehydratedState(
-            InvitationStatus status, CognitoSubject patientSubject, String failureCode) {
+            InvitationStatus status,
+            CognitoSubject patientSubject,
+            String failureCode,
+            Instant activatedAt) {
         boolean hasFailure = failureCode != null && !failureCode.isBlank();
         switch (status) {
             case PENDING -> {
-                if (patientSubject != null || hasFailure) {
+                if (patientSubject != null || hasFailure || activatedAt != null) {
                     throw new IllegalArgumentException("Pending invitation state is inconsistent");
                 }
             }
-            case SENT -> {
-                if (patientSubject == null || hasFailure) {
-                    throw new IllegalArgumentException("Sent invitation state is inconsistent");
+            case INVITED -> {
+                if (patientSubject == null || hasFailure || activatedAt != null) {
+                    throw new IllegalArgumentException("Invited patient state is inconsistent");
+                }
+            }
+            case ACTIVATED -> {
+                if (patientSubject == null || hasFailure || activatedAt == null) {
+                    throw new IllegalArgumentException("Activated patient state is inconsistent");
                 }
             }
             case FAILED -> {
-                if (patientSubject != null || !hasFailure) {
+                if (patientSubject != null || !hasFailure || activatedAt != null) {
                     throw new IllegalArgumentException("Failed invitation state is inconsistent");
                 }
             }
         }
     }
 
-    public void markSent(CognitoSubject patientSubject, Instant occurredAt) {
+    public void markInvited(CognitoSubject patientSubject, Instant occurredAt) {
         ensurePending();
         ensureChronological(occurredAt);
 
         this.patientSubject = Objects.requireNonNull(patientSubject, "Patient subject must not be null");
-        this.status = InvitationStatus.SENT;
+        this.status = InvitationStatus.INVITED;
         this.updatedAt = occurredAt;
         this.domainEvents.add(new PatientInvitationCompleted(
                 UUID.randomUUID(), id, invitedByDoctor, patientSubject, occurredAt));
@@ -113,6 +129,19 @@ public final class PatientInvitation {
         this.failureCode = failureCode.trim();
         this.status = InvitationStatus.FAILED;
         this.updatedAt = occurredAt;
+    }
+
+    public void markActivated(Instant occurredAt) {
+        if (status == InvitationStatus.ACTIVATED) {
+            return;
+        }
+        if (status != InvitationStatus.INVITED) {
+            throw new IllegalStateException("Only an invited patient account can be activated");
+        }
+        ensureChronological(occurredAt);
+        status = InvitationStatus.ACTIVATED;
+        activatedAt = occurredAt;
+        updatedAt = occurredAt;
     }
 
     public List<PatientInvitationCompleted> pullDomainEvents() {
@@ -156,6 +185,10 @@ public final class PatientInvitation {
 
     public Optional<String> failureCode() {
         return Optional.ofNullable(failureCode);
+    }
+
+    public Optional<Instant> activatedAt() {
+        return Optional.ofNullable(activatedAt);
     }
 
     public Instant createdAt() {

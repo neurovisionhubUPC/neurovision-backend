@@ -72,7 +72,7 @@ class JpaPatientInvitationRepositoryTest {
         repository.save(invitation);
 
         var sentAt = CREATED_AT.plusSeconds(30);
-        invitation.markSent(new CognitoSubject("patient-cognito-sub"), sentAt);
+        invitation.markInvited(new CognitoSubject("patient-cognito-sub"), sentAt);
         var events = invitation.pullDomainEvents().stream()
                 .map(PatientAccountInvitedV1::from)
                 .toList();
@@ -80,7 +80,7 @@ class JpaPatientInvitationRepositoryTest {
         repository.saveWithOutboxEvents(invitation, events);
 
         var restored = repository.findById(invitation.id()).orElseThrow();
-        assertEquals(InvitationStatus.SENT, restored.status());
+        assertEquals(InvitationStatus.INVITED, restored.status());
         assertEquals("patient-cognito-sub", restored.patientSubject().orElseThrow().value());
         assertEquals(sentAt, restored.updatedAt());
 
