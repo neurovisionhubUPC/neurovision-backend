@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "batchId": "51da9973-f3b6-4b86-8a84-25762ccf89ee",
+  "therapySessionId": "3f1a860f-cc55-40d9-b86b-377780949b82",
+  "streamId": "cc192a52-6b60-436e-8ba5-89b530da5d22",
+  "sequence": 0,
+  "capturedAt": "2026-09-12T12:00:00Z",
+  "sentAt": "2026-09-12T12:00:05Z",
+  "gazeSamples": [
+    {
+      "offsetMs": 0,
+      "x": 0.25,
+      "y": 0.75,
+      "confidence": 0.9
+    }
+  ],
+  "gameplaySamples": [
+    {
+      "offsetMs": 5,
+      "playerX": 0.2,
+      "playerY": 0.8,
+      "targetX": 0.6,
+      "targetY": 0.4,
+      "score": 10,
+      "speed": 1.5,
+      "progress": 0.5
+    }
+  ]
+}

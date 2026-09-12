@@ -16,6 +16,7 @@
         <module>iam-service</module>
         <module>profile-service</module>
         <module>clinical-service</module>
+        <module>telemetry-service</module>
     </modules>
 
     <properties>
