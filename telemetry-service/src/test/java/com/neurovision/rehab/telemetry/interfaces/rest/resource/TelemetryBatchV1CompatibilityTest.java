@@ -1,4 +1,4 @@
-package com.neurovision.rehab.telemetry.interfaces.rest.resource.v1;
+package com.neurovision.rehab.telemetry.interfaces.rest.resource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -14,7 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.neurovision.rehab.telemetry.application.internal.validation.TelemetryBatchValidator;
 import com.neurovision.rehab.telemetry.application.internal.validation.TelemetryValidationPolicy;
 import com.neurovision.rehab.telemetry.domain.model.valueobjects.TelemetryBatch;
-import com.neurovision.rehab.telemetry.interfaces.rest.transform.TelemetryBatchV1Mapper;
+import com.neurovision.rehab.telemetry.interfaces.rest.transform.TelemetryBatchRestAssembler;
 
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -33,7 +33,7 @@ class TelemetryBatchV1CompatibilityTest {
         }
 
         TelemetryBatchV1 contract = objectMapper.readValue(fixtureBytes, TelemetryBatchV1.class);
-        TelemetryBatch domain = new TelemetryBatchV1Mapper().toDomain(contract);
+        TelemetryBatch domain = TelemetryBatchRestAssembler.toDomain(contract);
 
         assertEquals(1, domain.schemaVersion());
         assertEquals(1, domain.gazeSamples().size());

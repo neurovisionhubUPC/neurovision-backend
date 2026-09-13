@@ -1,4 +1,4 @@
-package com.neurovision.rehab.telemetry.interfaces.rest.resource.v1;
+package com.neurovision.rehab.telemetry.interfaces.rest.resource;
 
 import java.time.Instant;
 import java.util.ArrayList;
