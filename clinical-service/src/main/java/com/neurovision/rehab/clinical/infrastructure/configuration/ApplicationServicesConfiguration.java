@@ -1,13 +1,18 @@
 package com.neurovision.rehab.clinical.infrastructure.configuration;
 
 import com.neurovision.rehab.clinical.application.internal.commandservices.RegisterInvitedClinicalPatientCommandService;
+import com.neurovision.rehab.clinical.application.internal.commandservices.AppendTherapeuticConfigurationCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.StartTherapySessionCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.TransitionTherapySessionCommandService;
+import com.neurovision.rehab.clinical.application.internal.commandservices.CreateTherapyPlanCommandService;
+import com.neurovision.rehab.clinical.application.internal.commandservices.ReviseTherapyPlanCommandService;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.ClinicalPatientRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.DoctorPatientAssignmentRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.InboxEventRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyPlanRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapySessionRepository;
+import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapeuticExerciseConfigurationRepository;
+import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyPlanRevisionRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import java.time.Clock;
@@ -36,9 +41,10 @@ public class ApplicationServicesConfiguration {
     @ApplicationScoped
     StartTherapySessionCommandService startTherapySessionCommandService(
             TherapyPlanRepository therapyPlanRepository,
-            TherapySessionRepository therapySessionRepository) {
+            TherapySessionRepository therapySessionRepository,
+            TherapyPlanRevisionRepository revisionRepository) {
         return new StartTherapySessionCommandService(
-                therapyPlanRepository, therapySessionRepository, UUID::randomUUID,
+                therapyPlanRepository, therapySessionRepository, revisionRepository, UUID::randomUUID,
                 Clock.systemUTC(), Duration.ofMinutes(2));
     }
 
@@ -47,5 +53,37 @@ public class ApplicationServicesConfiguration {
     TransitionTherapySessionCommandService transitionTherapySessionCommandService(
             TherapySessionRepository therapySessionRepository) {
         return new TransitionTherapySessionCommandService(therapySessionRepository);
+    }
+
+    @Produces
+    @ApplicationScoped
+    AppendTherapeuticConfigurationCommandService appendTherapeuticConfigurationCommandService(
+            TherapyPlanRepository therapyPlanRepository,
+            DoctorPatientAssignmentRepository assignmentRepository,
+            TherapeuticExerciseConfigurationRepository configurationRepository) {
+        return new AppendTherapeuticConfigurationCommandService(
+                therapyPlanRepository, assignmentRepository, configurationRepository,
+                UUID::randomUUID, Clock.systemUTC());
+    }
+
+    @Produces
+    @ApplicationScoped
+    CreateTherapyPlanCommandService createTherapyPlanCommandService(
+            DoctorPatientAssignmentRepository assignmentRepository,
+            TherapyPlanRepository therapyPlanRepository) {
+        return new CreateTherapyPlanCommandService(
+                assignmentRepository, therapyPlanRepository, UUID::randomUUID);
+    }
+
+    @Produces
+    @ApplicationScoped
+    ReviseTherapyPlanCommandService reviseTherapyPlanCommandService(
+            TherapyPlanRepository therapyPlanRepository,
+            TherapyPlanRevisionRepository revisionRepository,
+            DoctorPatientAssignmentRepository assignmentRepository,
+            TherapySessionRepository therapySessionRepository) {
+        return new ReviseTherapyPlanCommandService(
+                therapyPlanRepository, revisionRepository, assignmentRepository,
+                therapySessionRepository, UUID::randomUUID, Clock.systemUTC());
     }
 }

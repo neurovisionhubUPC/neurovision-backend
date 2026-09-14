@@ -49,9 +49,6 @@ public final class TherapyPlan {
         if (maximumSessionDurationMinutes < minimumValidDurationMinutes) {
             throw new IllegalArgumentException("Maximum session duration must not be lower than minimum valid duration");
         }
-        if (dailyHardSafetyLimitMinutes != null && dailyHardSafetyLimitMinutes < maximumSessionDurationMinutes) {
-            throw new IllegalArgumentException("Hard safety limit must accommodate one maximum-duration session");
-        }
         if (minimumValidSampleCount < 1) throw new IllegalArgumentException("Minimum valid sample count must be positive");
         Objects.requireNonNull(dailyExercisePrescriptions, "Daily exercise prescriptions must not be null");
         if (dailyExercisePrescriptions.isEmpty()) throw new IllegalArgumentException("At least one exercise must be prescribed");
@@ -61,10 +58,6 @@ public final class TherapyPlan {
             if (quantity == null || quantity < 1) throw new IllegalArgumentException("Prescribed exercise quantity must be positive");
             normalizedPrescriptions.put(exercise, quantity);
         });
-        long prescribedTotal = normalizedPrescriptions.values().stream().mapToLong(Integer::longValue).sum();
-        if (prescribedTotal > dailySessionLimit) {
-            throw new IllegalArgumentException("Daily exercise prescriptions must not exceed the daily session limit");
-        }
         this.configurationVersion = configurationVersion;
         this.dailySessionLimit = dailySessionLimit;
         this.dailyTargetDurationMinutes = dailyTargetDurationMinutes;

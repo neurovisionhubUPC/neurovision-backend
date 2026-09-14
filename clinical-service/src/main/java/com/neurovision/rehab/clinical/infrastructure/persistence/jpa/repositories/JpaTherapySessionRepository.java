@@ -31,6 +31,12 @@ public class JpaTherapySessionRepository implements TherapySessionRepository {
         return Optional.ofNullable(entities.findActiveByPatient(patientId.value())).map(TherapySessionEntity::toDomain);
     }
     @Override @Transactional(Transactional.TxType.MANDATORY)
+    public Optional<TherapySession> findActiveByPlanForUpdate(TherapyPlanId planId) {
+        return entities.find("therapyPlanId = ?1 and status = 'ACTIVE'", planId.value())
+                .withLock(LockModeType.PESSIMISTIC_WRITE).firstResultOptional()
+                .map(TherapySessionEntity::toDomain);
+    }
+    @Override @Transactional(Transactional.TxType.MANDATORY)
     public Optional<TherapySession> findByIdForUpdate(TherapySessionId sessionId) {
         return Optional.ofNullable(entityManager.find(
                         TherapySessionEntity.class, sessionId.value(), LockModeType.PESSIMISTIC_WRITE))

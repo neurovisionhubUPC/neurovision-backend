@@ -6,6 +6,7 @@ import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapyPlanId;
 import com.neurovision.rehab.clinical.infrastructure.persistence.jpa.entities.TherapyPlanEntity;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
+import jakarta.persistence.LockModeType;
 import java.util.*;
 
 @ApplicationScoped
@@ -14,9 +15,15 @@ public class JpaTherapyPlanRepository implements TherapyPlanRepository {
     public JpaTherapyPlanRepository(TherapyPlanPanacheRepository entities) { this.entities = Objects.requireNonNull(entities); }
     @Override @Transactional(Transactional.TxType.SUPPORTS)
     public Optional<TherapyPlan> findById(TherapyPlanId id) { return entities.findByIdOptional(id.value()).map(TherapyPlanEntity::toDomain); }
+    @Override @Transactional(Transactional.TxType.MANDATORY)
+    public Optional<TherapyPlan> findByIdForUpdate(TherapyPlanId id) {
+        return Optional.ofNullable(entities.findById(id.value(), LockModeType.PESSIMISTIC_WRITE))
+                .map(TherapyPlanEntity::toDomain);
+    }
     @Override @Transactional(Transactional.TxType.REQUIRED)
     public void save(TherapyPlan plan) {
-        entities.findByIdOptional(plan.id().value()).ifPresentOrElse(e -> e.updateFrom(plan), () -> entities.persist(TherapyPlanEntity.fromDomain(plan)));
+        Optional.ofNullable(entities.findById(plan.id().value(), LockModeType.PESSIMISTIC_WRITE))
+                .ifPresentOrElse(e -> e.updateFrom(plan), () -> entities.persist(TherapyPlanEntity.fromDomain(plan)));
         entities.flush();
     }
 }

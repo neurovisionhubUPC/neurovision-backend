@@ -3,6 +3,7 @@ package com.neurovision.rehab.clinical.infrastructure.persistence.jpa.repositori
 import com.neurovision.rehab.clinical.infrastructure.persistence.jpa.entities.DoctorPatientAssignmentEntity;
 import io.quarkus.hibernate.orm.panache.PanacheRepositoryBase;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.persistence.LockModeType;
 import java.util.UUID;
 
 @ApplicationScoped
@@ -14,6 +15,15 @@ public class DoctorPatientAssignmentPanacheRepository
                         "clinicalPatientId = ?1 and doctorSubject = ?2 and status = 'ACTIVE'",
                         patientId,
                         doctorSubject)
+                .firstResult();
+    }
+
+    public DoctorPatientAssignmentEntity findActiveForUpdate(UUID patientId, String doctorSubject) {
+        return find(
+                        "clinicalPatientId = ?1 and doctorSubject = ?2 and status = 'ACTIVE'",
+                        patientId,
+                        doctorSubject)
+                .withLock(LockModeType.PESSIMISTIC_WRITE)
                 .firstResult();
     }
 }

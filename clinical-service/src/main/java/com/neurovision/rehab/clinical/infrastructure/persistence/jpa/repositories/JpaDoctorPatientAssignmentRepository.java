@@ -31,10 +31,21 @@ public class JpaDoctorPatientAssignmentRepository implements DoctorPatientAssign
     }
 
     @Override
+    @Transactional(Transactional.TxType.MANDATORY)
+    public Optional<DoctorPatientAssignment> findActiveByClinicalPatientIdAndDoctorSubjectForUpdate(
+            ClinicalPatientId clinicalPatientId, CognitoSubject doctorSubject) {
+        Objects.requireNonNull(clinicalPatientId, "Clinical patient ID must not be null");
+        Objects.requireNonNull(doctorSubject, "Doctor subject must not be null");
+        return Optional.ofNullable(
+                        entities.findActiveForUpdate(clinicalPatientId.value(), doctorSubject.value()))
+                .map(DoctorPatientAssignmentEntity::toDomain);
+    }
+
+    @Override
     @Transactional(Transactional.TxType.REQUIRED)
     public void save(DoctorPatientAssignment assignment) {
         Objects.requireNonNull(assignment, "Doctor-patient assignment must not be null");
-        entities.findByIdOptional(assignment.id().value()).ifPresentOrElse(
+        Optional.ofNullable(entities.findById(assignment.id().value(), jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)).ifPresentOrElse(
                 entity -> entity.updateFrom(assignment),
                 () -> entities.persist(DoctorPatientAssignmentEntity.fromDomain(assignment)));
         entities.flush();

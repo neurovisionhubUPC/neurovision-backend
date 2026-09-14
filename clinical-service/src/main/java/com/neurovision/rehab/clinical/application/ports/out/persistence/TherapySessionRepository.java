@@ -9,6 +9,7 @@ public interface TherapySessionRepository {
     void acquirePatientStartLock(ClinicalPatientId patientId);
     Optional<TherapySession> findByPatientAndIdempotencyKey(ClinicalPatientId patientId, IdempotencyKey key);
     Optional<TherapySession> findActiveByPatient(ClinicalPatientId patientId);
+    Optional<TherapySession> findActiveByPlanForUpdate(TherapyPlanId planId);
     Optional<TherapySession> findByIdForUpdate(TherapySessionId sessionId);
     long countConsumedSlots(TherapyPlanId planId, LocalDate quotaDate);
     long countConsumedExerciseSlots(TherapyPlanId planId, LocalDate quotaDate, ExerciseCode exerciseCode);

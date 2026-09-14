@@ -56,6 +56,10 @@ class TransitionTherapySessionCommandServiceTest {
         @Override public void acquirePatientStartLock(ClinicalPatientId patientId) {}
         @Override public Optional<TherapySession> findByPatientAndIdempotencyKey(ClinicalPatientId patientId, IdempotencyKey key) { return Optional.empty(); }
         @Override public Optional<TherapySession> findActiveByPatient(ClinicalPatientId patientId) { return Optional.empty(); }
+        @Override public Optional<TherapySession> findActiveByPlanForUpdate(TherapyPlanId planId) {
+            return session.therapyPlanId().equals(planId) && session.status() == TherapySessionStatus.ACTIVE
+                    ? Optional.of(session) : Optional.empty();
+        }
         @Override public Optional<TherapySession> findByIdForUpdate(TherapySessionId sessionId) { lockRead = true; return session.id().equals(sessionId) ? Optional.of(session) : Optional.empty(); }
         @Override public long countConsumedSlots(TherapyPlanId planId, LocalDate quotaDate) { return 0; }
         @Override public long countConsumedExerciseSlots(TherapyPlanId planId, LocalDate quotaDate, ExerciseCode exerciseCode) { return 0; }

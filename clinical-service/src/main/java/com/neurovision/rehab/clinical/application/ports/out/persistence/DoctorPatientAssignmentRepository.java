@@ -10,5 +10,12 @@ public interface DoctorPatientAssignmentRepository {
     Optional<DoctorPatientAssignment> findActiveByClinicalPatientIdAndDoctorSubject(
             ClinicalPatientId clinicalPatientId, CognitoSubject doctorSubject);
 
+    /**
+     * Acquires the assignment-row write lock shared by authorization checks and assignment
+     * mutations. Must be called inside the surrounding use-case transaction.
+     */
+    Optional<DoctorPatientAssignment> findActiveByClinicalPatientIdAndDoctorSubjectForUpdate(
+            ClinicalPatientId clinicalPatientId, CognitoSubject doctorSubject);
+
     void save(DoctorPatientAssignment assignment);
 }

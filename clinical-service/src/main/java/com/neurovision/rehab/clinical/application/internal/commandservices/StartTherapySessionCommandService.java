@@ -2,6 +2,8 @@ package com.neurovision.rehab.clinical.application.internal.commandservices;
 
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyPlanRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapySessionRepository;
+import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyPlanRevisionRepository;
+import com.neurovision.rehab.clinical.domain.model.aggregates.TherapyPlanRevision;
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapySession;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapySessionId;
 import java.nio.charset.StandardCharsets;
@@ -20,15 +22,18 @@ public final class StartTherapySessionCommandService {
 
     private final TherapyPlanRepository planRepository;
     private final TherapySessionRepository sessionRepository;
+    private final TherapyPlanRevisionRepository revisionRepository;
     private final Supplier<UUID> idSupplier;
     private final Clock clock;
     private final Duration leaseDuration;
 
     public StartTherapySessionCommandService(
             TherapyPlanRepository planRepository, TherapySessionRepository sessionRepository,
+            TherapyPlanRevisionRepository revisionRepository,
             Supplier<UUID> idSupplier, Clock clock, Duration leaseDuration) {
         this.planRepository = Objects.requireNonNull(planRepository);
         this.sessionRepository = Objects.requireNonNull(sessionRepository);
+        this.revisionRepository = Objects.requireNonNull(revisionRepository);
         this.idSupplier = Objects.requireNonNull(idSupplier);
         this.clock = Objects.requireNonNull(clock);
         this.leaseDuration = Objects.requireNonNull(leaseDuration);
@@ -37,6 +42,12 @@ public final class StartTherapySessionCommandService {
 
     public StartTherapySessionResult handle(StartTherapySessionCommand command) {
         Objects.requireNonNull(command);
+        // Plan-first locking serializes admission against immediate plan safety revisions.
+        var basePlan = planRepository.findByIdForUpdate(command.therapyPlanId())
+                .orElseThrow(() -> new IllegalArgumentException("Therapy plan does not exist"));
+        if (!basePlan.clinicalPatientId().equals(command.clinicalPatientId())) {
+            throw new IllegalArgumentException("Therapy plan does not belong to patient");
+        }
         sessionRepository.acquirePatientStartLock(command.clinicalPatientId());
         String fingerprint = fingerprint(command);
         var previous = sessionRepository.findByPatientAndIdempotencyKey(command.clinicalPatientId(), command.idempotencyKey());
@@ -48,12 +59,11 @@ public final class StartTherapySessionCommandService {
         var active = sessionRepository.findActiveByPatient(command.clinicalPatientId());
         if (active.isPresent()) throw TherapySessionStartConflictException.activeSession(active.get().id());
 
-        var plan = planRepository.findById(command.therapyPlanId())
-                .orElseThrow(() -> new IllegalArgumentException("Therapy plan does not exist"));
-        if (!plan.clinicalPatientId().equals(command.clinicalPatientId())) throw new IllegalArgumentException("Therapy plan does not belong to patient");
+        var now = clock.instant();
+        var plan = TherapyPlanRevision.applyEligible(basePlan,
+                revisionRepository.findEffective(basePlan.id(), now), now);
         if (plan.configurationVersion() != command.requestedConfigurationVersion()) throw new IllegalStateException("Requested therapy configuration is stale");
 
-        var now = clock.instant();
         var quotaDate = now.atZone(QUOTA_ZONE).toLocalDate();
         plan.validateAdmission(
                 command.exerciseCode(),

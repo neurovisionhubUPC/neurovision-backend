@@ -15,6 +15,7 @@ class StartTherapySessionCommandServiceTest {
     private static final Instant NOW = Instant.parse("2026-09-14T04:30:00Z");
     private FakePlanRepository plans;
     private FakeSessionRepository sessions;
+    private FakeRevisionRepository revisions;
     private StartTherapySessionCommandService service;
 
     @BeforeEach
@@ -22,7 +23,8 @@ class StartTherapySessionCommandServiceTest {
         plans = new FakePlanRepository();
         plans.plan = TherapySessionTestData.plan();
         sessions = new FakeSessionRepository();
-        service = new StartTherapySessionCommandService(plans, sessions, () -> SESSION_ID,
+        revisions = new FakeRevisionRepository();
+        service = new StartTherapySessionCommandService(plans, sessions, revisions, () -> SESSION_ID,
                 Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofMinutes(2));
     }
 
@@ -92,6 +94,17 @@ class StartTherapySessionCommandServiceTest {
                 new ClinicalPatientId(UUID.randomUUID()), plans.plan.id(), new ExerciseCode("visual-search"), 7, new IdempotencyKey("wrong"))));
     }
 
+    @Test
+    void shouldUseLatestEligiblePlanRevisionForAdmission() {
+        revisions.values.add(TherapyPlanRevision.create(new TherapyPlanRevisionId(UUID.randomUUID()),
+                plans.plan.id(), 1, UUID.randomUUID(), "b".repeat(64),
+                TherapyPlanRevisionKind.IMMEDIATE, NOW, NOW,
+                plans.plan.doctorSubject(), null, 1, null, null, null, null));
+        sessions.consumedSlots = 1;
+        assertThrows(IllegalStateException.class,
+                () -> service.handle(command("revised-quota", "visual-search")));
+    }
+
     private StartTherapySessionCommand command(String key, String exercise) {
         return new StartTherapySessionCommand(plans.plan.clinicalPatientId(), plans.plan.id(), new ExerciseCode(exercise),
                 plans.plan.configurationVersion(), new IdempotencyKey(key));
@@ -100,6 +113,7 @@ class StartTherapySessionCommandServiceTest {
     private static final class FakePlanRepository implements TherapyPlanRepository {
         private TherapyPlan plan;
         @Override public Optional<TherapyPlan> findById(TherapyPlanId id) { return plan.id().equals(id) ? Optional.of(plan) : Optional.empty(); }
+        @Override public Optional<TherapyPlan> findByIdForUpdate(TherapyPlanId id) { return findById(id); }
         @Override public void save(TherapyPlan plan) { this.plan = plan; }
     }
 
@@ -117,6 +131,10 @@ class StartTherapySessionCommandServiceTest {
         @Override public Optional<TherapySession> findActiveByPatient(ClinicalPatientId patientId) {
             return stored.stream().filter(s -> s.clinicalPatientId().equals(patientId) && s.status() == TherapySessionStatus.ACTIVE).findFirst();
         }
+        @Override public Optional<TherapySession> findActiveByPlanForUpdate(TherapyPlanId planId) {
+            return stored.stream().filter(s -> s.therapyPlanId().equals(planId)
+                    && s.status() == TherapySessionStatus.ACTIVE).findFirst();
+        }
         @Override public Optional<TherapySession> findByIdForUpdate(TherapySessionId sessionId) {
             return stored.stream().filter(s -> s.id().equals(sessionId)).findFirst();
         }
@@ -126,6 +144,16 @@ class StartTherapySessionCommandServiceTest {
         }
         @Override public long sumExposureSeconds(TherapyPlanId planId, LocalDate quotaDate) { return exposureSeconds; }
         @Override public void save(TherapySession session) { saveCalls++; stored.add(session); }
+    }
+
+    private static final class FakeRevisionRepository implements TherapyPlanRevisionRepository {
+        private final List<TherapyPlanRevision> values = new ArrayList<>();
+        @Override public List<TherapyPlanRevision> findEffective(TherapyPlanId planId, Instant at) {
+            return values.stream().filter(value -> !value.effectiveFrom().isAfter(at)).toList();
+        }
+        @Override public List<TherapyPlanRevision> findByCommandId(TherapyPlanId planId, UUID commandId) { return List.of(); }
+        @Override public long findLatestSequence(TherapyPlanId planId) { return 0; }
+        @Override public void appendAll(List<TherapyPlanRevision> revisions) {}
     }
 
     private static final class TherapySessionTestData {

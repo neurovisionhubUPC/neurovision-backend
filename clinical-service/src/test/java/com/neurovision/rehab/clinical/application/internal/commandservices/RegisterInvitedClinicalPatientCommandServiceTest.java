@@ -200,6 +200,12 @@ class RegisterInvitedClinicalPatientCommandServiceTest {
         }
 
         @Override
+        public Optional<DoctorPatientAssignment> findActiveByClinicalPatientIdAndDoctorSubjectForUpdate(
+                ClinicalPatientId patientId, CognitoSubject doctorSubject) {
+            return findActiveByClinicalPatientIdAndDoctorSubject(patientId, doctorSubject);
+        }
+
+        @Override
         public void save(DoctorPatientAssignment assignment) {
             if (failOnSave) {
                 throw new IllegalStateException("Simulated assignment persistence failure");
