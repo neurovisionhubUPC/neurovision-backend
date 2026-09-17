@@ -50,6 +50,11 @@ public class JpaTherapySessionRepository implements TherapySessionRepository {
                         TherapySessionEntity.class, sessionId.value(), LockModeType.PESSIMISTIC_WRITE))
                 .map(entity -> entity.toDomain(codec));
     }
+    @Override @Transactional(Transactional.TxType.SUPPORTS)
+    public Optional<TherapySession> findById(TherapySessionId sessionId) {
+        Objects.requireNonNull(sessionId);
+        return entities.findByIdOptional(sessionId.value()).map(entity -> entity.toDomain(codec));
+    }
     @Override public long countConsumedSlots(TherapyPlanId planId, LocalDate quotaDate) { return entities.countConsumedSlots(planId.value(), quotaDate); }
     @Override public long countConsumedExerciseSlots(TherapyPlanId planId, LocalDate quotaDate, ExerciseCode exerciseCode) {
         return entities.countConsumedExerciseSlots(planId.value(), quotaDate, exerciseCode.value());

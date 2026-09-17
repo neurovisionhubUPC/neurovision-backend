@@ -5,9 +5,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.neurovision.rehab.clinical.application.internal.commandservices.*;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.*;
+import com.neurovision.rehab.clinical.application.ports.out.authorization.TelemetryAuthorizationSnapshotRepository;
+import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeTelemetryIngestionQueryService;
+import com.neurovision.rehab.clinical.application.internal.queryservices.TelemetryIngestionDeniedException;
 import com.neurovision.rehab.clinical.domain.model.aggregates.*;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
 import com.neurovision.rehab.clinical.infrastructure.persistence.jpa.transaction.TransactionalTherapySessionStarter;
+import com.neurovision.rehab.clinical.infrastructure.persistence.jpa.transaction.TransactionalTherapySessionTransitioner;
 import com.neurovision.rehab.clinical.support.TherapeuticConfigurationTestData;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.junit.QuarkusTest;
@@ -40,6 +44,9 @@ class TherapySessionConfigurationBindingPersistenceTest {
     @Inject TherapeuticExerciseConfigurationRepository configurations;
     @Inject TherapySessionRepository sessions;
     @Inject TransactionalTherapySessionStarter starter;
+    @Inject TransactionalTherapySessionTransitioner transitioner;
+    @Inject TelemetryAuthorizationSnapshotRepository authorizationSnapshots;
+    @Inject AuthorizeTelemetryIngestionQueryService telemetryAuthorization;
 
     @BeforeEach
     void setUp() {
@@ -58,6 +65,54 @@ class TherapySessionConfigurationBindingPersistenceTest {
     @AfterEach
     void tearDown() {
         cleanDatabase();
+    }
+
+    @Test
+    void oneSnapshotRejectsDeterministicSplitReadInterleaving() {
+        var sessionId = starter.handle(command("split-read-regression")).session().id();
+        var subject = new CognitoSubject("phase-2c-patient");
+        assertEquals(TherapySessionStatus.ACTIVE,
+                authorizationSnapshots.findBySubjectAndSession(subject, sessionId).orElseThrow().status());
+        assertTrue(authorizationSnapshots.findBySubjectAndSession(
+                new CognitoSubject("other-patient"), sessionId).isEmpty());
+        assertTrue(authorizationSnapshots.findBySubjectAndSession(
+                subject, new TherapySessionId(UUID.randomUUID())).isEmpty());
+        var assignment = assignments.findActiveByClinicalPatientIdAndDoctorSubject(PATIENT_ID, DOCTOR)
+                .orElseThrow();
+        assignment.end(Instant.now());
+        assignments.save(assignment);
+
+        // The old implementation could retain this first read while later statements changed.
+        var staleSession = sessions.findById(sessionId).orElseThrow();
+        assertEquals(TherapySessionStatus.ACTIVE, staleSession.status());
+        assertTrue(authorizationSnapshots.findBySubjectAndSession(subject, sessionId).isEmpty());
+
+        transitioner.handle(new TransitionTherapySessionCommand(
+                sessionId, TransitionTherapySessionCommand.Action.CANCEL,
+                "interleaving-regression", Instant.now()));
+        assignments.save(DoctorPatientAssignment.assign(new DoctorPatientAssignmentId(UUID.randomUUID()),
+                PATIENT_ID, DOCTOR, Instant.now()));
+
+        // Old split reads now see ACTIVE from before the transition and an ACTIVE assignment
+        // from after it, although those predicates never overlapped in committed state.
+        boolean legacySplitReadWouldPermit = staleSession.status() == TherapySessionStatus.ACTIVE
+                && assignments.findActiveByClinicalPatientIdAndDoctorSubject(PATIENT_ID, DOCTOR).isPresent();
+        assertTrue(legacySplitReadWouldPermit);
+        var atomicFacts = authorizationSnapshots.findBySubjectAndSession(subject, sessionId).orElseThrow();
+        assertEquals(TherapySessionStatus.CANCELLED, atomicFacts.status());
+        assertThrows(TelemetryIngestionDeniedException.class,
+                () -> telemetryAuthorization.authorize("phase-2c-patient", sessionId));
+    }
+
+    @Test
+    void readsPersistedSessionByIdWithoutAWriteTransaction() {
+        var created = starter.handle(command("telemetry-read"));
+
+        var found = sessions.findById(created.session().id()).orElseThrow();
+        assertEquals(created.session().id(), found.id());
+        assertEquals(PATIENT_ID, found.clinicalPatientId());
+        assertEquals(TherapySessionStatus.ACTIVE, found.status());
+        assertTrue(sessions.findById(new TherapySessionId(UUID.randomUUID())).isEmpty());
     }
 
     @Test

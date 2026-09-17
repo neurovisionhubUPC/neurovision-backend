@@ -10,6 +10,7 @@ public interface TherapySessionRepository {
     Optional<TherapySession> findByPatientAndIdempotencyKey(ClinicalPatientId patientId, IdempotencyKey key);
     Optional<TherapySession> findActiveByPatient(ClinicalPatientId patientId);
     Optional<TherapySession> findActiveByPlanForUpdate(TherapyPlanId planId);
+    Optional<TherapySession> findById(TherapySessionId sessionId);
     Optional<TherapySession> findByIdForUpdate(TherapySessionId sessionId);
     long countConsumedSlots(TherapyPlanId planId, LocalDate quotaDate);
     long countConsumedExerciseSlots(TherapyPlanId planId, LocalDate quotaDate, ExerciseCode exerciseCode);

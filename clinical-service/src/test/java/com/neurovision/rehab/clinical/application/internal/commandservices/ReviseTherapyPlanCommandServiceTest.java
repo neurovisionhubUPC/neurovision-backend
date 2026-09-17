@@ -275,6 +275,7 @@ class ReviseTherapyPlanCommandServiceTest {
         @Override public Optional<TherapySession> findByPatientAndIdempotencyKey(ClinicalPatientId id, IdempotencyKey key) { return Optional.empty(); }
         @Override public Optional<TherapySession> findActiveByPatient(ClinicalPatientId id) { return Optional.ofNullable(active); }
         @Override public Optional<TherapySession> findActiveByPlanForUpdate(TherapyPlanId id) { return Optional.ofNullable(active); }
+        @Override public Optional<TherapySession> findById(TherapySessionId id) { return Optional.ofNullable(active); }
         @Override public Optional<TherapySession> findByIdForUpdate(TherapySessionId id) { return Optional.ofNullable(active); }
         @Override public long countConsumedSlots(TherapyPlanId id, LocalDate date) { return 0; }
         @Override public long countConsumedExerciseSlots(TherapyPlanId id, LocalDate date, ExerciseCode code) { return 0; }

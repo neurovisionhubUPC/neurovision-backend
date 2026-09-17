@@ -241,6 +241,9 @@ class StartTherapySessionCommandServiceTest {
         @Override public Optional<TherapySession> findActiveByPlanForUpdate(TherapyPlanId planId) {
             return stored.stream().filter(s -> s.therapyPlanId().equals(planId) && s.status() == TherapySessionStatus.ACTIVE).findFirst();
         }
+        @Override public Optional<TherapySession> findById(TherapySessionId sessionId) {
+            return stored.stream().filter(s -> s.id().equals(sessionId)).findFirst();
+        }
         @Override public Optional<TherapySession> findByIdForUpdate(TherapySessionId sessionId) {
             return stored.stream().filter(s -> s.id().equals(sessionId)).findFirst();
         }

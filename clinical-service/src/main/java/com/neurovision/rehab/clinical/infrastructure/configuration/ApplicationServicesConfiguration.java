@@ -6,6 +6,8 @@ import com.neurovision.rehab.clinical.application.internal.commandservices.Start
 import com.neurovision.rehab.clinical.application.internal.commandservices.TransitionTherapySessionCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.CreateTherapyPlanCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.ReviseTherapyPlanCommandService;
+import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeTelemetryIngestionQueryService;
+import com.neurovision.rehab.clinical.application.ports.out.authorization.TelemetryAuthorizationSnapshotRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.ClinicalPatientRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.DoctorPatientAssignmentRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.InboxEventRepository;
@@ -21,6 +23,13 @@ import java.util.UUID;
 
 @ApplicationScoped
 public class ApplicationServicesConfiguration {
+
+    @Produces
+    @ApplicationScoped
+    AuthorizeTelemetryIngestionQueryService authorizeTelemetryIngestionQueryService(
+            TelemetryAuthorizationSnapshotRepository snapshots) {
+        return new AuthorizeTelemetryIngestionQueryService(snapshots, Clock.systemUTC());
+    }
 
     @Produces
     @ApplicationScoped
