@@ -48,10 +48,16 @@ Expected topics:
 
 - `patient-account-invited.v1`
 - `patient-account-invited.v1.dlq`
+- `telemetry-batch-accepted.v1`
+- `telemetry-batch-accepted.v1.dlq`
 - `neurovision.dlq-replay-audit.v1`
 
 Use the [DLQ operations runbook](../operations/README.md) to inspect and replay
-records. A replay never deletes the original DLQ record because Kafka topics are
+IAM/Profile records only. The Telemetry DLQ retains sensitive pseudonymous
+coordinates and is not supported by that tool. A separate metadata-only,
+exact-position Telemetry operator path is documented in the same runbook for
+host-reachable local Kafka; k3d execution wiring remains a Phase 10 deployment
+task. A replay never deletes the original DLQ record because Kafka topics are
 append-only logs.
 
 ## Scope boundary
