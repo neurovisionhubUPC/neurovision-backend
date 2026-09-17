@@ -55,7 +55,7 @@ class TherapyPlanRevisionPersistenceTest {
         assertEquals(2, result.revisions().size());
         assertEquals(2L, countRows("therapy_plan_revisions"));
         assertEquals(1L, countRows("therapy_plan_revision_exercises"));
-        assertEquals(5L, schemaVersion());
+        assertEquals(6L, schemaVersion());
         assertThrows(RuntimeException.class, () -> QuarkusTransaction.requiringNew().run(() ->
                 entityManager.createNativeQuery("UPDATE therapy_plan_revisions SET sequence = 99 WHERE command_id = :id")
                         .setParameter("id", commandId).executeUpdate()));

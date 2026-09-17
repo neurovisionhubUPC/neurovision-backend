@@ -97,8 +97,8 @@ class TherapySessionConfigurationBindingPersistenceTest {
     }
 
     @Test
-    void databaseEnforcesBindingAndConfigurationAppendOnlyRulesAndFlywayV5() {
-        assertEquals("5", QuarkusTransaction.requiringNew().call(() -> entityManager
+    void databaseEnforcesBindingAndConfigurationAppendOnlyRulesAndFlywayV6() {
+        assertEquals("6", QuarkusTransaction.requiringNew().call(() -> entityManager
                 .createNativeQuery("SELECT max(version) FROM flyway_schema_history WHERE success")
                 .getSingleResult().toString()));
 
@@ -136,6 +136,14 @@ class TherapySessionConfigurationBindingPersistenceTest {
                         .setParameter("id", created.session().id().value()).executeUpdate()));
         assertThrows(RuntimeException.class, () -> QuarkusTransaction.requiringNew().run(() ->
                 entityManager.createNativeQuery("""
+                                UPDATE therapy_sessions
+                                SET id = :replacementId
+                                WHERE id = :id
+                                """)
+                        .setParameter("replacementId", UUID.randomUUID())
+                        .setParameter("id", created.session().id().value()).executeUpdate()));
+        assertThrows(RuntimeException.class, () -> QuarkusTransaction.requiringNew().run(() ->
+                entityManager.createNativeQuery("""
                                 INSERT INTO therapy_sessions (
                                     id, therapy_plan_id, clinical_patient_id, doctor_cognito_sub,
                                     exercise_code, configuration_version, quota_date,
@@ -164,7 +172,7 @@ class TherapySessionConfigurationBindingPersistenceTest {
     }
 
     @Test
-    void historicalV4SessionRetryMatchesCurrentFingerprintAfterV5Upgrade() throws Exception {
+    void historicalV4SessionRetrySurvivesV5AndV6Upgrade() throws Exception {
         String schema = "phase2c_upgrade_" + UUID.randomUUID().toString().replace("-", "");
         try {
             Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema)
@@ -197,7 +205,10 @@ class TherapySessionConfigurationBindingPersistenceTest {
                             (id, therapy_plan_id, exercise_code, version, parameter_schema_version,
                              effective_from, created_by_doctor_subject, created_at, status, parameters)
                         VALUES ('%s', '%s', 'VISUAL_SEARCH', 1, 1, '%s', 'historical-doctor',
-                                '%s', 'ACTIVE', '{"mode":"TARGET_SEARCH_WITH_DISTRACTORS"}'::jsonb);
+                                '%s', 'ACTIVE', '{"mode":"TARGET_SEARCH_WITH_DISTRACTORS",\
+                                "affectedHemifield":"LEFT","targetCount":15,"distractorCount":8,\
+                                "minimumFixationMs":700,"maximumSearchTimeMs":10000,\
+                                "affectedHemifieldBias":0.7,"targetSizePx":70,"difficultyLevel":2}'::jsonb);
                         INSERT INTO therapy_sessions
                             (id, therapy_plan_id, clinical_patient_id, doctor_cognito_sub, exercise_code,
                              configuration_version, quota_date, idempotency_key, request_fingerprint,
@@ -217,11 +228,27 @@ class TherapySessionConfigurationBindingPersistenceTest {
 
             Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema)
                     .locations("classpath:db/migration").target("5").load().migrate();
+            Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema)
+                    .locations("classpath:db/migration").target("6").load().migrate();
+            Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema)
+                    .locations("classpath:db/migration").load().validate();
 
             var retryCommand = new StartTherapySessionCommand(
                     new ClinicalPatientId(patientId), new TherapyPlanId(planId),
                     new ExerciseCode("visual-search"), new IdempotencyKey(idempotencyKey));
             String expectedFingerprint = StartTherapySessionRequestFingerprint.compute(retryCommand);
+            var replay = QuarkusTransaction.requiringNew().call(() -> {
+                entityManager.createNativeQuery("SET LOCAL search_path TO " + schema).executeUpdate();
+                return starter.handle(retryCommand);
+            });
+            assertEquals(StartTherapySessionResult.Outcome.IDEMPOTENT_REPLAY, replay.outcome());
+            assertEquals(sessionId, replay.session().id().value());
+            assertEquals(new TherapeuticConfigurationId(configurationId),
+                    replay.session().therapeuticConfigurationId());
+            assertEquals(1L, replay.session().configurationVersion());
+            assertEquals(TherapeuticConfigurationTestData.visualSearchConfiguration(
+                            new TherapyPlanId(planId), configurationId, 1, createdAt)
+                            .parameters(), replay.session().configurationParameters());
             try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                 connection.setAutoCommit(false);
                 statement.execute("SET LOCAL search_path TO " + schema);
@@ -238,8 +265,12 @@ class TherapySessionConfigurationBindingPersistenceTest {
                     assertEquals(configurationId,
                             result.getObject("therapeutic_configuration_id", UUID.class));
                     assertEquals(1L, result.getLong("configuration_version"));
-                    assertEquals(new ObjectMapper().readTree(
-                                    "{\"mode\":\"TARGET_SEARCH_WITH_DISTRACTORS\"}"),
+                    assertEquals(new ObjectMapper().readTree("""
+                                    {"mode":"TARGET_SEARCH_WITH_DISTRACTORS",\
+                                    "affectedHemifield":"LEFT","targetCount":15,"distractorCount":8,\
+                                    "minimumFixationMs":700,"maximumSearchTimeMs":10000,\
+                                    "affectedHemifieldBias":0.7,"targetSizePx":70,"difficultyLevel":2}
+                                    """),
                             new ObjectMapper().readTree(result.getString("configuration_parameters")));
                     assertFalse(result.next());
                 }
