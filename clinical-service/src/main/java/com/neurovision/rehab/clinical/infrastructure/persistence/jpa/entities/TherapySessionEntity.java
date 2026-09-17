@@ -2,10 +2,13 @@ package com.neurovision.rehab.clinical.infrastructure.persistence.jpa.entities;
 
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapySession;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
+import com.neurovision.rehab.clinical.infrastructure.persistence.json.TherapeuticConfigurationJsonCodec;
 import jakarta.persistence.*;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "therapy_sessions")
@@ -15,7 +18,16 @@ public class TherapySessionEntity {
     @Column(name = "clinical_patient_id", nullable = false, updatable = false) private UUID clinicalPatientId;
     @Column(name = "doctor_cognito_sub", nullable = false, length = 128, updatable = false) private String doctorSubject;
     @Column(name = "exercise_code", nullable = false, length = 100, updatable = false) private String exerciseCode;
+    @Column(name = "therapeutic_configuration_id", nullable = false, updatable = false)
+    private UUID therapeuticConfigurationId;
     @Column(name = "configuration_version", nullable = false, updatable = false) private long configurationVersion;
+    @Column(name = "therapeutic_exercise", nullable = false, length = 32, updatable = false)
+    private String therapeuticExercise;
+    @Column(name = "parameter_schema_version", nullable = false, updatable = false)
+    private int parameterSchemaVersion;
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "configuration_parameters", nullable = false, updatable = false, columnDefinition = "jsonb")
+    private String configurationParameters;
     @Column(name = "quota_date", nullable = false, updatable = false) private LocalDate quotaDate;
     @Column(name = "idempotency_key", nullable = false, length = 128, updatable = false) private String idempotencyKey;
     @Column(name = "request_fingerprint", nullable = false, length = 64, updatable = false) private String requestFingerprint;
@@ -34,14 +46,19 @@ public class TherapySessionEntity {
 
     protected TherapySessionEntity() {}
 
-    public static TherapySessionEntity fromDomain(TherapySession session) {
+    public static TherapySessionEntity fromDomain(
+            TherapySession session, TherapeuticConfigurationJsonCodec codec) {
         var entity = new TherapySessionEntity();
         entity.id = session.id().value();
         entity.therapyPlanId = session.therapyPlanId().value();
         entity.clinicalPatientId = session.clinicalPatientId().value();
         entity.doctorSubject = session.doctorSubject().value();
         entity.exerciseCode = session.exerciseCode().value();
+        entity.therapeuticConfigurationId = session.therapeuticConfigurationId().value();
         entity.configurationVersion = session.configurationVersion();
+        entity.therapeuticExercise = session.therapeuticExercise().name();
+        entity.parameterSchemaVersion = session.parameterSchemaVersion();
+        entity.configurationParameters = codec.encode(session.configurationParameters());
         entity.quotaDate = session.quotaDate();
         entity.idempotencyKey = session.idempotencyKey().value();
         entity.requestFingerprint = session.requestFingerprint();
@@ -64,10 +81,15 @@ public class TherapySessionEntity {
         terminationReason = session.terminationReason().orElse(null);
     }
 
-    public TherapySession toDomain() {
+    public TherapySession toDomain(TherapeuticConfigurationJsonCodec codec) {
+        var exercise = TherapeuticExercise.valueOf(therapeuticExercise);
+        var configuration = new TherapeuticConfigurationSnapshot(
+                new TherapeuticConfigurationId(therapeuticConfigurationId), configurationVersion,
+                exercise, parameterSchemaVersion,
+                codec.decode(exercise, parameterSchemaVersion, configurationParameters));
         return TherapySession.rehydrate(new TherapySessionId(id), new TherapyPlanId(therapyPlanId),
                 new ClinicalPatientId(clinicalPatientId), new CognitoSubject(doctorSubject), new ExerciseCode(exerciseCode),
-                configurationVersion, quotaDate, new IdempotencyKey(idempotencyKey), requestFingerprint,
+                configuration, quotaDate, new IdempotencyKey(idempotencyKey), requestFingerprint,
                 minimumValidDurationMinutes, maximumSessionDurationMinutes, minimumValidSampleCount,
                 TherapySessionStatus.valueOf(status), activeDurationSeconds, validSampleCount,
                 consumesDailyQuota, startedAt, leaseExpiresAt, endedAt, terminationReason);

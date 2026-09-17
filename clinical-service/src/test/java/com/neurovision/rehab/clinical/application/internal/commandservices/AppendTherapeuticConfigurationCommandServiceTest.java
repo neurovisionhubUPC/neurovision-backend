@@ -111,6 +111,14 @@ class AppendTherapeuticConfigurationCommandServiceTest {
             return values.stream().filter(value -> value.therapyPlanId().equals(plan) && value.exercise() == exercise)
                     .mapToLong(TherapeuticExerciseConfiguration::version).max();
         }
+        @Override public Optional<TherapeuticExerciseConfiguration> findEffective(
+                TherapyPlanId plan, TherapeuticExercise exercise, Instant effectiveAt) {
+            return values.stream().filter(value -> value.therapyPlanId().equals(plan))
+                    .filter(value -> value.exercise() == exercise)
+                    .filter(value -> !value.effectiveFrom().isAfter(effectiveAt))
+                    .max(java.util.Comparator.comparing(TherapeuticExerciseConfiguration::effectiveFrom)
+                            .thenComparingLong(TherapeuticExerciseConfiguration::version));
+        }
         @Override public void append(TherapeuticExerciseConfiguration configuration) {
             calls.add("append");
             boolean duplicate = values.stream().anyMatch(value -> value.therapyPlanId().equals(configuration.therapyPlanId())

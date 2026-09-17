@@ -1,6 +1,7 @@
 package com.neurovision.rehab.clinical.application.internal.commandservices;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static com.neurovision.rehab.clinical.support.TherapeuticConfigurationTestData.visualSearchSnapshot;
 
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapySessionRepository;
 import com.neurovision.rehab.clinical.domain.model.aggregates.*;
@@ -45,7 +46,8 @@ class TransitionTherapySessionCommandServiceTest {
                 Map.of(new ExerciseCode("visual-search"), 1));
         var start = Instant.parse("2026-09-13T15:00:00Z");
         return TherapySession.start(new TherapySessionId(UUID.randomUUID()), plan, new ExerciseCode("visual-search"),
-                LocalDate.of(2026, 9, 13), new IdempotencyKey("attempt-1"), "a".repeat(64), start, start.plusSeconds(120));
+                LocalDate.of(2026, 9, 13), visualSearchSnapshot(),
+                new IdempotencyKey("attempt-1"), "a".repeat(64), start, start.plusSeconds(120));
     }
 
     private static final class FakeRepository implements TherapySessionRepository {

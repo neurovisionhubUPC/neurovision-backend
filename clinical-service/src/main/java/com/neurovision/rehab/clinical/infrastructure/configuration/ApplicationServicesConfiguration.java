@@ -42,9 +42,12 @@ public class ApplicationServicesConfiguration {
     StartTherapySessionCommandService startTherapySessionCommandService(
             TherapyPlanRepository therapyPlanRepository,
             TherapySessionRepository therapySessionRepository,
-            TherapyPlanRevisionRepository revisionRepository) {
+            TherapyPlanRevisionRepository revisionRepository,
+            DoctorPatientAssignmentRepository assignmentRepository,
+            TherapeuticExerciseConfigurationRepository configurationRepository) {
         return new StartTherapySessionCommandService(
-                therapyPlanRepository, therapySessionRepository, revisionRepository, UUID::randomUUID,
+                therapyPlanRepository, therapySessionRepository, revisionRepository,
+                assignmentRepository, configurationRepository, UUID::randomUUID,
                 Clock.systemUTC(), Duration.ofMinutes(2));
     }
 

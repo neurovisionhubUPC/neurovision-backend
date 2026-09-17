@@ -1,6 +1,7 @@
 package com.neurovision.rehab.clinical.domain.model.aggregates;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static com.neurovision.rehab.clinical.support.TherapeuticConfigurationTestData.visualSearchSnapshot;
 
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
 import java.time.*;
@@ -13,11 +14,14 @@ class TherapySessionTest {
     private static final String FINGERPRINT = "a".repeat(64);
 
     @Test
-    void shouldStartDirectlyActiveWithFrozenPlanConfiguration() {
+    void shouldStartDirectlyActiveWithFrozenPlanAndTherapeuticConfiguration() {
         var session = session();
 
         assertEquals(TherapySessionStatus.ACTIVE, session.status());
-        assertEquals(7, session.configurationVersion());
+        assertEquals(1, session.configurationVersion());
+        assertEquals(TherapeuticExercise.VISUAL_SEARCH, session.therapeuticExercise());
+        assertEquals(visualSearchSnapshot().configurationId(), session.therapeuticConfigurationId());
+        assertEquals(visualSearchSnapshot().parameters(), session.configurationParameters());
         assertEquals(5, session.minimumValidDurationMinutes());
         assertEquals(LocalDate.of(2026, 9, 13), session.quotaDate());
         assertTrue(session.consumesDailyQuota());
@@ -100,17 +104,18 @@ class TherapySessionTest {
     void shouldRequireDatabaseSafeRequestFingerprint() {
         assertThrows(IllegalArgumentException.class, () -> TherapySession.start(
                 new TherapySessionId(UUID.randomUUID()), plan(), new ExerciseCode("visual-search"),
-                LocalDate.of(2026, 9, 13), new IdempotencyKey("attempt-invalid"),
+                LocalDate.of(2026, 9, 13), visualSearchSnapshot(), new IdempotencyKey("attempt-invalid"),
                 "a".repeat(63), START, START.plusSeconds(120)));
         assertThrows(IllegalArgumentException.class, () -> TherapySession.start(
                 new TherapySessionId(UUID.randomUUID()), plan(), new ExerciseCode("visual-search"),
-                LocalDate.of(2026, 9, 13), new IdempotencyKey("attempt-uppercase"),
+                LocalDate.of(2026, 9, 13), visualSearchSnapshot(), new IdempotencyKey("attempt-uppercase"),
                 "A".repeat(64), START, START.plusSeconds(120)));
     }
 
     private static TherapySession session() {
         return TherapySession.start(new TherapySessionId(UUID.fromString("10000000-0000-0000-0000-000000000001")),
-                plan(), new ExerciseCode("visual-search"), LocalDate.of(2026, 9, 13), new IdempotencyKey("attempt-1"),
+                plan(), new ExerciseCode("visual-search"), LocalDate.of(2026, 9, 13), visualSearchSnapshot(),
+                new IdempotencyKey("attempt-1"),
                 FINGERPRINT, START, START.plusSeconds(120));
     }
 

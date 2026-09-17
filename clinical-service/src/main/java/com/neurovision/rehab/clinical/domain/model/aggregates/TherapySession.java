@@ -15,7 +15,7 @@ public final class TherapySession {
     private final ClinicalPatientId clinicalPatientId;
     private final CognitoSubject doctorSubject;
     private final ExerciseCode exerciseCode;
-    private final long configurationVersion;
+    private final TherapeuticConfigurationSnapshot therapeuticConfiguration;
     private final LocalDate quotaDate;
     private final IdempotencyKey idempotencyKey;
     private final String requestFingerprint;
@@ -33,7 +33,8 @@ public final class TherapySession {
 
     private TherapySession(
             TherapySessionId id, TherapyPlanId therapyPlanId, ClinicalPatientId clinicalPatientId,
-            CognitoSubject doctorSubject, ExerciseCode exerciseCode, long configurationVersion,
+            CognitoSubject doctorSubject, ExerciseCode exerciseCode,
+            TherapeuticConfigurationSnapshot therapeuticConfiguration,
             LocalDate quotaDate, IdempotencyKey idempotencyKey, String requestFingerprint,
             int minimumValidDurationMinutes, int maximumSessionDurationMinutes,
             long minimumValidSampleCount, TherapySessionStatus status, long activeDurationSeconds,
@@ -44,7 +45,10 @@ public final class TherapySession {
         this.clinicalPatientId = Objects.requireNonNull(clinicalPatientId);
         this.doctorSubject = Objects.requireNonNull(doctorSubject);
         this.exerciseCode = Objects.requireNonNull(exerciseCode);
-        this.configurationVersion = configurationVersion;
+        this.therapeuticConfiguration = Objects.requireNonNull(therapeuticConfiguration);
+        if (!therapeuticConfiguration.exercise().code().equals(exerciseCode)) {
+            throw new IllegalArgumentException("Frozen configuration does not match session exercise");
+        }
         this.quotaDate = Objects.requireNonNull(quotaDate);
         this.idempotencyKey = Objects.requireNonNull(idempotencyKey);
         this.requestFingerprint = validateFingerprint(requestFingerprint);
@@ -64,11 +68,12 @@ public final class TherapySession {
 
     public static TherapySession start(
             TherapySessionId id, TherapyPlan plan, ExerciseCode exerciseCode, LocalDate quotaDate,
+            TherapeuticConfigurationSnapshot therapeuticConfiguration,
             IdempotencyKey idempotencyKey, String requestFingerprint, Instant startedAt,
             Instant leaseExpiresAt) {
         if (!leaseExpiresAt.isAfter(startedAt)) throw new IllegalArgumentException("Lease expiry must follow start time");
         return new TherapySession(id, plan.id(), plan.clinicalPatientId(), plan.doctorSubject(), exerciseCode,
-                plan.configurationVersion(), quotaDate, idempotencyKey, requestFingerprint,
+                therapeuticConfiguration, quotaDate, idempotencyKey, requestFingerprint,
                 plan.minimumValidDurationMinutes(), plan.maximumSessionDurationMinutes(),
                 plan.minimumValidSampleCount(), TherapySessionStatus.ACTIVE, 0, 0, true,
                 startedAt, leaseExpiresAt, null, null);
@@ -76,11 +81,12 @@ public final class TherapySession {
 
     public static TherapySession rehydrate(
             TherapySessionId id, TherapyPlanId planId, ClinicalPatientId patientId, CognitoSubject doctorSubject,
-            ExerciseCode exerciseCode, long configurationVersion, LocalDate quotaDate, IdempotencyKey key,
+            ExerciseCode exerciseCode, TherapeuticConfigurationSnapshot therapeuticConfiguration,
+            LocalDate quotaDate, IdempotencyKey key,
             String fingerprint, int minimumDuration, int maximumDuration, long minimumSamples,
             TherapySessionStatus status, long activeSeconds, long validSamples, boolean consumesQuota,
             Instant startedAt, Instant leaseExpiresAt, Instant endedAt, String reason) {
-        return new TherapySession(id, planId, patientId, doctorSubject, exerciseCode, configurationVersion,
+        return new TherapySession(id, planId, patientId, doctorSubject, exerciseCode, therapeuticConfiguration,
                 quotaDate, key, fingerprint, minimumDuration, maximumDuration, minimumSamples, status,
                 activeSeconds, validSamples, consumesQuota, startedAt, leaseExpiresAt, endedAt, reason);
     }
@@ -135,7 +141,7 @@ public final class TherapySession {
     }
 
     private void validateState() {
-        if (configurationVersion < 1 || minimumValidDurationMinutes < 1
+        if (minimumValidDurationMinutes < 1
                 || maximumSessionDurationMinutes < minimumValidDurationMinutes || minimumValidSampleCount < 1
                 || activeDurationSeconds < 0 || activeDurationSeconds > maximumSessionDurationMinutes * 60L
                 || validSampleCount < 0) throw new IllegalArgumentException("Invalid frozen session configuration or evidence");
@@ -169,7 +175,12 @@ public final class TherapySession {
     public ClinicalPatientId clinicalPatientId() { return clinicalPatientId; }
     public CognitoSubject doctorSubject() { return doctorSubject; }
     public ExerciseCode exerciseCode() { return exerciseCode; }
-    public long configurationVersion() { return configurationVersion; }
+    public TherapeuticConfigurationId therapeuticConfigurationId() { return therapeuticConfiguration.configurationId(); }
+    public long configurationVersion() { return therapeuticConfiguration.configurationVersion(); }
+    public TherapeuticExercise therapeuticExercise() { return therapeuticConfiguration.exercise(); }
+    public int parameterSchemaVersion() { return therapeuticConfiguration.parameterSchemaVersion(); }
+    public TherapeuticExerciseParameters configurationParameters() { return therapeuticConfiguration.parameters(); }
+    public TherapeuticConfigurationSnapshot therapeuticConfiguration() { return therapeuticConfiguration; }
     public LocalDate quotaDate() { return quotaDate; }
     public IdempotencyKey idempotencyKey() { return idempotencyKey; }
     public String requestFingerprint() { return requestFingerprint; }

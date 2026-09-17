@@ -1,6 +1,7 @@
 package com.neurovision.rehab.clinical.application.internal.commandservices;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static com.neurovision.rehab.clinical.support.TherapeuticConfigurationTestData.fixationSnapshot;
 
 import com.neurovision.rehab.clinical.application.ports.out.persistence.*;
 import com.neurovision.rehab.clinical.domain.model.aggregates.*;
@@ -219,6 +220,7 @@ class ReviseTherapyPlanCommandServiceTest {
     private TherapySession activeSession() {
         return TherapySession.start(new TherapySessionId(UUID.randomUUID()), plan(),
                 new ExerciseCode("fixation"), LocalDate.of(2026, 9, 13),
+                fixationSnapshot(),
                 new IdempotencyKey("active"), "a".repeat(64), NOW.minusSeconds(30), NOW.plusSeconds(90));
     }
 

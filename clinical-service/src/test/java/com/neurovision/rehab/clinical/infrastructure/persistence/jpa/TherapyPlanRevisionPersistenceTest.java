@@ -1,6 +1,8 @@
 package com.neurovision.rehab.clinical.infrastructure.persistence.jpa;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static com.neurovision.rehab.clinical.support.TherapeuticConfigurationTestData.fixationSnapshot;
+import static com.neurovision.rehab.clinical.support.TherapeuticConfigurationTestData.fixationConfiguration;
 
 import com.neurovision.rehab.clinical.application.internal.commandservices.*;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.*;
@@ -24,6 +26,7 @@ class TherapyPlanRevisionPersistenceTest {
     @Inject TherapyPlanRepository plans;
     @Inject TherapyPlanRevisionRepository revisions;
     @Inject TherapySessionRepository sessions;
+    @Inject TherapeuticExerciseConfigurationRepository configurations;
     @Inject TransactionalTherapyPlanReviser reviser;
 
     private final ClinicalPatientId patientId = new ClinicalPatientId(UUID.fromString("31000000-0000-0000-0000-000000000001"));
@@ -52,7 +55,7 @@ class TherapyPlanRevisionPersistenceTest {
         assertEquals(2, result.revisions().size());
         assertEquals(2L, countRows("therapy_plan_revisions"));
         assertEquals(1L, countRows("therapy_plan_revision_exercises"));
-        assertEquals(4L, schemaVersion());
+        assertEquals(5L, schemaVersion());
         assertThrows(RuntimeException.class, () -> QuarkusTransaction.requiringNew().run(() ->
                 entityManager.createNativeQuery("UPDATE therapy_plan_revisions SET sequence = 99 WHERE command_id = :id")
                         .setParameter("id", commandId).executeUpdate()));
@@ -146,8 +149,12 @@ class TherapyPlanRevisionPersistenceTest {
     @Test
     void safetyReductionCancelsActiveSessionInTheSameTransaction() {
         Instant started = Instant.now().minusSeconds(30);
+        QuarkusTransaction.requiringNew().run(() -> configurations.append(fixationConfiguration(
+                planId, UUID.fromString("40000000-0000-0000-0000-000000000002"), 1,
+                Instant.parse("2026-09-13T00:00:00Z"))));
         var session = TherapySession.start(new TherapySessionId(UUID.randomUUID()), basePlan(),
                 new ExerciseCode("fixation"), started.atZone(ZoneId.of("America/Lima")).toLocalDate(),
+                fixationSnapshot(),
                 new IdempotencyKey("phase-2b-active"), "c".repeat(64), started, started.plusSeconds(120));
         QuarkusTransaction.requiringNew().run(() -> sessions.save(session));
 
@@ -203,10 +210,9 @@ class TherapyPlanRevisionPersistenceTest {
         QuarkusTransaction.requiringNew().run(() -> {
             // TRUNCATE is deliberately test-only: row-level append-only triggers reject DELETE.
             entityManager.createNativeQuery(
-                    "TRUNCATE TABLE therapy_plan_revision_exercises, therapy_plan_revisions")
+                    "TRUNCATE TABLE therapy_sessions, therapeutic_exercise_configurations, "
+                            + "therapy_plan_revision_exercises, therapy_plan_revisions")
                     .executeUpdate();
-            entityManager.createNativeQuery("DELETE FROM therapeutic_exercise_configurations").executeUpdate();
-            entityManager.createNativeQuery("DELETE FROM therapy_sessions").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM therapy_plan_exercise_prescriptions").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM therapy_plans").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM inbox_events").executeUpdate();

@@ -184,7 +184,8 @@ class TherapeuticExerciseConfigurationPersistenceTest {
             entityManager.createNativeQuery(
                     "TRUNCATE TABLE therapy_plan_revision_exercises, therapy_plan_revisions")
                     .executeUpdate();
-            entityManager.createNativeQuery("DELETE FROM therapeutic_exercise_configurations").executeUpdate();
+            entityManager.createNativeQuery("TRUNCATE TABLE therapy_sessions, therapeutic_exercise_configurations")
+                    .executeUpdate();
             entityManager.createNativeQuery("DELETE FROM therapy_sessions").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM therapy_plan_exercise_prescriptions").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM therapy_plans").executeUpdate();

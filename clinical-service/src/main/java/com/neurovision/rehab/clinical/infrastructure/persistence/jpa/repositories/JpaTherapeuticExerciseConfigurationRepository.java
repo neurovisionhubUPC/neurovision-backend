@@ -11,6 +11,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 import java.util.Objects;
 import java.util.OptionalLong;
+import java.time.Instant;
+import java.util.Optional;
 
 @ApplicationScoped
 public class JpaTherapeuticExerciseConfigurationRepository
@@ -35,6 +37,17 @@ public class JpaTherapeuticExerciseConfigurationRepository
                 .setParameter("exercise", exercise.name())
                 .getSingleResult();
         return value == null ? OptionalLong.empty() : OptionalLong.of(value.longValue());
+    }
+
+    @Override
+    @Transactional(Transactional.TxType.MANDATORY)
+    public Optional<TherapeuticExerciseConfiguration> findEffective(
+            TherapyPlanId planId, TherapeuticExercise exercise, Instant effectiveAt) {
+        Objects.requireNonNull(planId, "Therapy plan ID must not be null");
+        Objects.requireNonNull(exercise, "Therapeutic exercise must not be null");
+        Objects.requireNonNull(effectiveAt, "Effective time must not be null");
+        return Optional.ofNullable(entities.findEffective(planId.value(), exercise.name(), effectiveAt))
+                .map(entity -> entity.toDomain(codec));
     }
 
     @Override
