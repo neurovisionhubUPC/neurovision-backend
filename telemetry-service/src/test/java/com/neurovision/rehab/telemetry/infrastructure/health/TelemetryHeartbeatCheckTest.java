@@ -22,11 +22,11 @@ class TelemetryHeartbeatCheckTest {
     }
 
     @Test
-    void reportsTheTelemetryServiceAsReady() {
+    void reportsNotReadyWhenConfiguredKafkaBrokerIsUnavailable() {
         given()
                 .when().get("/q/health/ready")
                 .then()
-                .statusCode(200)
-                .body("status", is("UP"));
+                .statusCode(503)
+                .body("status", is("DOWN"));
     }
 }

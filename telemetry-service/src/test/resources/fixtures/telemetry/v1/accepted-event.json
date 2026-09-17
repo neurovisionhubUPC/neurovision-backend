@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "eventId": "EVENT_ID",
+  "batchId": "BATCH_ID",
+  "therapySessionId": "THERAPY_SESSION_ID",
+  "streamId": "STREAM_ID",
+  "sequence": 3,
+  "capturedAt": "2026-09-17T10:00:00Z",
+  "sentAt": "2026-09-17T10:00:01Z",
+  "serverReceivedAt": "2026-09-17T10:00:02Z",
+  "correlationId": "CORRELATION_ID",
+  "traceId": "trace",
+  "gazeSamples": [{"offsetMs": 0, "x": 0.2, "y": 0.8, "confidence": 0.9}],
+  "gameplaySamples": [{"offsetMs": 1, "playerX": 0.1, "playerY": 0.2, "targetX": 0.3,
+    "targetY": 0.4, "score": 12, "speed": 1.5, "progress": 0.6}]
+}
