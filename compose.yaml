@@ -49,6 +49,22 @@ services:
     restart: unless-stopped
     networks: [neurovision]
 
+  telemetry-timescaledb:
+    image: timescale/timescaledb:2.30.1-pg17
+    environment:
+      POSTGRES_DB: neurovision_telemetry
+      POSTGRES_USER: neurovision_telemetry
+      POSTGRES_PASSWORD: ${TELEMETRY_DB_PASSWORD:?Set TELEMETRY_DB_PASSWORD in .env before starting Telemetry}
+    volumes:
+      - telemetry-timescaledb-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [neurovision]
+
   kafka:
     image: apache/kafka:4.3.1
     environment:
@@ -173,6 +189,44 @@ services:
     restart: unless-stopped
     networks: [neurovision]
 
+  telemetry-service:
+    image: neurovision/telemetry-service:${NEUROVISION_IMAGE_TAG:-compose-native}
+    build:
+      context: ./telemetry-service
+      dockerfile: src/main/docker/Dockerfile.native-micro
+    environment:
+      TELEMETRY_DB_JDBC_URL: jdbc:postgresql://telemetry-timescaledb:5432/neurovision_telemetry
+      TELEMETRY_DB_REACTIVE_URL: postgresql://telemetry-timescaledb:5432/neurovision_telemetry
+      TELEMETRY_DB_USERNAME: neurovision_telemetry
+      TELEMETRY_DB_PASSWORD: ${TELEMETRY_DB_PASSWORD:?Set TELEMETRY_DB_PASSWORD in .env before starting Telemetry}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID}
+      COGNITO_ISSUER_URL: ${COGNITO_ISSUER_URL}
+      CLINICAL_INTERNAL_BASE_URL: http://clinical-service:8080
+      TELEMETRY_KAFKA_DELIVERY_TIMEOUT_MS: 10000
+      TELEMETRY_KAFKA_REQUEST_TIMEOUT_MS: 3000
+      TELEMETRY_KAFKA_MAX_BLOCK_MS: 3000
+      TELEMETRY_KAFKA_BUFFER_BYTES: 1048576
+      TELEMETRY_KAFKA_ACK_TIMEOUT_MS: 12000
+      TELEMETRY_MAX_EVENT_BYTES: 1048576
+      TELEMETRY_MAX_REQUEST_BYTES: 512K
+      TELEMETRY_MAX_SAMPLES: 1000
+      TELEMETRY_MAX_FUTURE_SKEW_SECONDS: 60
+      TELEMETRY_MAX_CONCURRENT_REQUESTS: 8
+      TELEMETRY_MAX_BATCHES_PER_SECOND: 20
+      TELEMETRY_CLINICAL_TIMEOUT_MS: 1500
+    ports:
+      - "${TELEMETRY_PORT:-8084}:8080"
+    depends_on:
+      telemetry-timescaledb:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      clinical-service:
+        condition: service_started
+    restart: unless-stopped
+    networks: [neurovision]
+
 networks:
   neurovision:
     name: neurovision-compose
@@ -181,4 +235,5 @@ volumes:
   iam-postgresql-data:
   profile-postgresql-data:
   clinical-postgresql-data:
+  telemetry-timescaledb-data:
   kafka-data:

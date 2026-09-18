@@ -1,13 +1,14 @@
 package com.neurovision.rehab.clinical.infrastructure.persistence.jpa.transaction;
 
 import com.neurovision.rehab.clinical.application.internal.commandservices.*;
+import com.neurovision.rehab.clinical.application.ports.in.TherapeuticConfigurationAppendUseCase;
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapeuticExerciseConfiguration;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 import java.util.Objects;
 
 @ApplicationScoped
-public class TransactionalTherapeuticConfigurationAppender {
+public class TransactionalTherapeuticConfigurationAppender implements TherapeuticConfigurationAppendUseCase {
     private final AppendTherapeuticConfigurationCommandService delegate;
 
     public TransactionalTherapeuticConfigurationAppender(
@@ -15,6 +16,7 @@ public class TransactionalTherapeuticConfigurationAppender {
         this.delegate = Objects.requireNonNull(delegate);
     }
 
+    @Override
     @Transactional
     public TherapeuticExerciseConfiguration handle(AppendTherapeuticConfigurationCommand command) {
         return delegate.handle(command);
