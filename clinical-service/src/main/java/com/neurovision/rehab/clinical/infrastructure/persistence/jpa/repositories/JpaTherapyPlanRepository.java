@@ -3,6 +3,7 @@ package com.neurovision.rehab.clinical.infrastructure.persistence.jpa.repositori
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyPlanRepository;
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapyPlan;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapyPlanId;
+import com.neurovision.rehab.clinical.domain.model.valueobjects.ClinicalPatientId;
 import com.neurovision.rehab.clinical.infrastructure.persistence.jpa.entities.TherapyPlanEntity;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
@@ -15,6 +16,11 @@ public class JpaTherapyPlanRepository implements TherapyPlanRepository {
     public JpaTherapyPlanRepository(TherapyPlanPanacheRepository entities) { this.entities = Objects.requireNonNull(entities); }
     @Override @Transactional(Transactional.TxType.SUPPORTS)
     public Optional<TherapyPlan> findById(TherapyPlanId id) { return entities.findByIdOptional(id.value()).map(TherapyPlanEntity::toDomain); }
+    @Override @Transactional(Transactional.TxType.SUPPORTS)
+    public List<TherapyPlan> findByClinicalPatientId(ClinicalPatientId patientId) {
+        return entities.find("clinicalPatientId = ?1 order by id", patientId.value()).list().stream()
+                .map(TherapyPlanEntity::toDomain).toList();
+    }
     @Override @Transactional(Transactional.TxType.MANDATORY)
     public Optional<TherapyPlan> findByIdForUpdate(TherapyPlanId id) {
         return Optional.ofNullable(entities.findById(id.value(), LockModeType.PESSIMISTIC_WRITE))

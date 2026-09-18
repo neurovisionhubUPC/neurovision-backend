@@ -3,11 +3,13 @@ package com.neurovision.rehab.clinical.infrastructure.configuration;
 import com.neurovision.rehab.clinical.application.internal.commandservices.RegisterInvitedClinicalPatientCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.AppendTherapeuticConfigurationCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.StartTherapySessionCommandService;
+import com.neurovision.rehab.clinical.application.internal.commandservices.StartPatientTherapySessionCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.TransitionTherapySessionCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.CreateTherapyPlanCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.ReviseTherapyPlanCommandService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeTelemetryIngestionQueryService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeHistoricalTelemetryReadQueryService;
+import com.neurovision.rehab.clinical.application.internal.queryservices.ListPatientTherapyPlansQueryService;
 import com.neurovision.rehab.clinical.application.ports.out.authorization.HistoricalTelemetryReadAuthorizationPort;
 import com.neurovision.rehab.clinical.application.ports.out.authorization.TelemetryAuthorizationSnapshotRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.ClinicalPatientRepository;
@@ -25,6 +27,23 @@ import java.util.UUID;
 
 @ApplicationScoped
 public class ApplicationServicesConfiguration {
+
+    @Produces
+    @ApplicationScoped
+    StartPatientTherapySessionCommandService startPatientTherapySessionCommandService(
+            ClinicalPatientRepository patients, StartTherapySessionCommandService starter) {
+        return new StartPatientTherapySessionCommandService(patients, starter);
+    }
+
+    @Produces
+    @ApplicationScoped
+    ListPatientTherapyPlansQueryService listPatientTherapyPlansQueryService(
+            ClinicalPatientRepository patients, TherapyPlanRepository plans,
+            TherapyPlanRevisionRepository revisions, DoctorPatientAssignmentRepository assignments,
+            TherapeuticExerciseConfigurationRepository configurations) {
+        return new ListPatientTherapyPlansQueryService(patients, plans, revisions, assignments,
+                configurations, Clock.systemUTC());
+    }
 
     @Produces
     @ApplicationScoped

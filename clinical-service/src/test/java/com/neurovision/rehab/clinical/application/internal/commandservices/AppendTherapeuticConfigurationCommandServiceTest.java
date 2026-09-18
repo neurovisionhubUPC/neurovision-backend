@@ -35,6 +35,9 @@ class AppendTherapeuticConfigurationCommandServiceTest {
                     @Override public Optional<TherapyPlan> findById(TherapyPlanId id) {
                         return id.equals(planId) ? Optional.of(plan) : Optional.empty();
                     }
+                    @Override public List<TherapyPlan> findByClinicalPatientId(ClinicalPatientId id) {
+                        return id.equals(patientId) ? List.of(plan) : List.of();
+                    }
                     @Override public Optional<TherapyPlan> findByIdForUpdate(TherapyPlanId id) {
                         calls.add("plan-lock");
                         return findById(id);

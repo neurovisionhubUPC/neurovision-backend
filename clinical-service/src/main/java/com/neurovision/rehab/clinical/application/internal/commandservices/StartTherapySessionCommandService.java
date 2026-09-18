@@ -51,9 +51,9 @@ public final class StartTherapySessionCommandService {
         Objects.requireNonNull(command);
         // Plan-first locking serializes admission against immediate plan safety revisions.
         var basePlan = planRepository.findByIdForUpdate(command.therapyPlanId())
-                .orElseThrow(() -> new IllegalArgumentException("Therapy plan does not exist"));
+                .orElseThrow(() -> new SecurityException("Therapy operation is not permitted"));
         if (!basePlan.clinicalPatientId().equals(command.clinicalPatientId())) {
-            throw new IllegalArgumentException("Therapy plan does not belong to patient");
+            throw new SecurityException("Therapy operation is not permitted");
         }
         String fingerprint = StartTherapySessionRequestFingerprint.compute(command);
         var previous = sessionRepository.findByPatientAndIdempotencyKey(command.clinicalPatientId(), command.idempotencyKey());

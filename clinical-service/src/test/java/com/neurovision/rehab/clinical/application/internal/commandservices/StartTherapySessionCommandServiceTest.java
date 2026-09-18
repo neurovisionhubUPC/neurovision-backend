@@ -185,6 +185,9 @@ class StartTherapySessionCommandServiceTest {
         private final List<String> lockOrder;
         private FakePlanRepository(List<String> lockOrder) { this.lockOrder = lockOrder; }
         @Override public Optional<TherapyPlan> findById(TherapyPlanId id) { return plan.id().equals(id) ? Optional.of(plan) : Optional.empty(); }
+        @Override public List<TherapyPlan> findByClinicalPatientId(ClinicalPatientId id) {
+            return plan.clinicalPatientId().equals(id) ? List.of(plan) : List.of();
+        }
         @Override public Optional<TherapyPlan> findByIdForUpdate(TherapyPlanId id) { lockOrder.add("plan-lock"); return findById(id); }
         @Override public void save(TherapyPlan plan) { this.plan = plan; }
     }

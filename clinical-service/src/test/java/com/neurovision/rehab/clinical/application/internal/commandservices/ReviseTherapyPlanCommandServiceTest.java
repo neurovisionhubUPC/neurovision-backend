@@ -230,6 +230,9 @@ class ReviseTherapyPlanCommandServiceTest {
         private Runnable onLock = () -> {};
         private FakePlans(TherapyPlan plan) { this.plan = plan; }
         @Override public Optional<TherapyPlan> findById(TherapyPlanId id) { return Optional.ofNullable(plan); }
+        @Override public List<TherapyPlan> findByClinicalPatientId(ClinicalPatientId id) {
+            return plan != null && plan.clinicalPatientId().equals(id) ? List.of(plan) : List.of();
+        }
         @Override public Optional<TherapyPlan> findByIdForUpdate(TherapyPlanId id) {
             calls.add("plan-lock");
             onLock.run();
