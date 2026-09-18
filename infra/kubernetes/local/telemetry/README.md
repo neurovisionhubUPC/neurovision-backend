@@ -12,10 +12,15 @@ on its existing ClusterIP Service; do not route `/api/internal/*` publicly.
    migration evidence from the task tracker; do not recreate or reset its PVC.
 2. Confirm `clinical-service-flyway-v6-20260918` completed successfully. This
    overlay does **not** rerun that Job or invoke a down migration.
-3. Import the already-built local images into `neurovision-local` under the
+3. Confirm local Kafka has both `telemetry-batch-accepted.v1` and
+   `telemetry-batch-accepted.v1.dlq`. Topic auto-creation is disabled. On an
+   existing cluster where they are absent, create **only** those two topics
+   with three partitions and replication factor one, then verify their
+   metadata and starting offsets. Do not rerun the full Kafka topic Job.
+4. Import the already-built local images into `neurovision-local` under the
    immutable tags recorded below. Do not replace `1.0.0-SNAPSHOT` or mutate a
    running workload while preparing the import.
-4. Run the existing local Secret setup with `-SkipAws -SkipTls`, after reviewing
+5. Run the existing local Secret setup with `-SkipAws -SkipTls`, after reviewing
    the active context. It preserves existing database passwords. Never print
    Secret values or put them in Git.
 
@@ -27,6 +32,19 @@ configured development Cognito issuer; obtain explicit authorization first.
 
 ```powershell
 kubectl config current-context
+# On this synthetic-only broker, create the two topics only if absent.
+kubectl -n neurovision exec kafka-0 -c kafka -- /opt/kafka/bin/kafka-topics.sh `
+  --bootstrap-server kafka:9092 --create --if-not-exists `
+  --topic telemetry-batch-accepted.v1 --partitions 3 --replication-factor 1
+kubectl -n neurovision exec kafka-0 -c kafka -- /opt/kafka/bin/kafka-topics.sh `
+  --bootstrap-server kafka:9092 --create --if-not-exists `
+  --topic telemetry-batch-accepted.v1.dlq --partitions 3 --replication-factor 1
+# Verify both topics have three partitions and one replica before continuing.
+kubectl -n neurovision exec kafka-0 -c kafka -- /opt/kafka/bin/kafka-topics.sh `
+  --bootstrap-server kafka:9092 --describe --topic telemetry-batch-accepted.v1
+kubectl -n neurovision exec kafka-0 -c kafka -- /opt/kafka/bin/kafka-topics.sh `
+  --bootstrap-server kafka:9092 --describe --topic telemetry-batch-accepted.v1.dlq
+
 # Stop before deployment if the pinned TimescaleDB image is not cached locally.
 docker image inspect timescale/timescaledb:2.30.1-pg17 --format '{{.Id}}' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Pinned TimescaleDB image is not cached locally.' }
@@ -64,6 +82,10 @@ Docker Hub. It gets a **separate empty** k3d PVC. Telemetry's first
 startup applies Flyway V1–V3 to that new database; do not copy Compose data,
 Kafka records, or its DLQ into k3d. These database and broker settings are
 local development fixtures, not controls for real patient data.
+
+The local Kafka topics inherit broker-default retention and have no production
+ACL/encryption controls. Keep them synthetic-only; do not infer that the DLQ is
+safe for real patient coordinates.
 
 On this Windows setup, `k3d image import` once printed a containerd
 missing-digest error but still returned exit code 0 and claimed success. The
