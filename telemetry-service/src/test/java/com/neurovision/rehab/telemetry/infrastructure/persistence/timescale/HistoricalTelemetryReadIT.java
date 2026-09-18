@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.util.UUID;
@@ -13,7 +14,7 @@ import org.junit.jupiter.api.Test;
 @QuarkusTest
 @QuarkusTestResource(value = TimescaleTestResource.class, restrictToAnnotatedClass = true)
 class HistoricalTelemetryReadIT {
-    @Inject DataSource dataSource;
+    @Inject Instance<DataSource> dataSource;
     @Inject PgHistoricalTelemetryReadAdapter reads;
 
     @Test
@@ -22,7 +23,7 @@ class HistoricalTelemetryReadIT {
         UUID stream = UUID.randomUUID();
         UUID otherStream = UUID.randomUUID();
         Instant at = Instant.parse("2026-09-17T12:00:00.123456Z");
-        try (var connection = dataSource.getConnection()) {
+        try (var connection = dataSource.get().getConnection()) {
             for (int i = 0; i < 3; i++) {
                 insert(connection, session, stream, new UUID(0, i + 1), at, i);
             }

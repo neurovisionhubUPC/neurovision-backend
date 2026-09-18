@@ -10,6 +10,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.quarkus.test.oidc.server.OidcWiremockTestResource;
 import io.smallrye.jwt.build.Jwt;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -29,11 +30,11 @@ class TelemetrySamplesRealOidcIT {
     private static final UUID STREAM = UUID.fromString("40ae017b-d707-43e3-a78c-dc617b632ced");
     private static final Instant AT = Instant.parse("2026-09-17T12:00:00.123456Z");
 
-    @Inject DataSource dataSource;
+    @Inject Instance<DataSource> dataSource;
 
     @Test
     void authenticatedClientPaginatesEqualTimeGazeAndGameplayWithoutIdentity() throws Exception {
-        try (var connection = dataSource.getConnection()) {
+        try (var connection = dataSource.get().getConnection()) {
             insert(connection, new UUID(0, 1), "GAZE", 0);
             insert(connection, new UUID(0, 2), "GAMEPLAY", 1);
             insert(connection, new UUID(0, 3), "GAZE", 2);
