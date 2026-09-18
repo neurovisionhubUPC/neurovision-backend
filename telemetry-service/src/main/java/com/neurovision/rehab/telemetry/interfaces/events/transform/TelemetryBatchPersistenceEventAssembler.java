@@ -7,6 +7,7 @@ import com.neurovision.rehab.telemetry.application.internal.validation.Telemetry
 import com.neurovision.rehab.telemetry.application.internal.validation.TelemetryValidationPolicy;
 import com.neurovision.rehab.telemetry.domain.model.valueobjects.TelemetryBatch;
 import com.neurovision.rehab.telemetry.interfaces.events.contracts.TelemetryBatchAcceptedV1;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -37,7 +38,7 @@ public final class TelemetryBatchPersistenceEventAssembler {
             throw new IllegalArgumentException("Invalid telemetry event contract");
         }
         if (event == null || event.schemaVersion() != 1 || event.eventId() == null || event.correlationId() == null
-                || event.serverReceivedAt() == null || event.traceId() == null
+                || event.serverReceivedAt() == null
                 || event.gazeSamples() == null || event.gameplaySamples() == null
                 || event.gazeSamples().stream().anyMatch(Objects::isNull)
                 || event.gameplaySamples().stream().anyMatch(Objects::isNull)
@@ -89,6 +90,7 @@ public final class TelemetryBatchPersistenceEventAssembler {
 
     public record Accepted(TelemetryBatch batch, Instant serverReceivedAt, String payloadSha256) {}
 
+    @RegisterForReflection
     private record StablePayload(int schemaVersion, java.util.UUID batchId,
             java.util.UUID therapySessionId, java.util.UUID streamId, long sequence, Instant capturedAt,
             java.util.List<TelemetryBatch.GazeSample> gazeSamples,

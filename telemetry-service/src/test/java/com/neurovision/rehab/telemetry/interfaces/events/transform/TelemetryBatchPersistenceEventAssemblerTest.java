@@ -36,6 +36,19 @@ class TelemetryBatchPersistenceEventAssemblerTest {
     }
 
     @Test
+    void acceptsOptionalNullTraceIdWithoutChangingSamplesOrFingerprint() throws Exception {
+        var eventId = UUID.randomUUID();
+        var receivedAt = now.minusSeconds(3);
+        var withoutTrace = decode(event(eventId, .2, receivedAt, null));
+        var withTrace = decode(event(eventId, .2, receivedAt, "trace"));
+
+        assertEquals(1, withoutTrace.batch().gazeSamples().size());
+        assertEquals(1, withoutTrace.batch().gameplaySamples().size());
+        assertEquals(withTrace.batch(), withoutTrace.batch());
+        assertEquals(withTrace.payloadSha256(), withoutTrace.payloadSha256());
+    }
+
+    @Test
     void rejectsWrongKeyExtraIdentityFieldAndDuplicateJsonKeys() throws Exception {
         var json = mapper.writeValueAsString(event(UUID.randomUUID(), .2, now.minusSeconds(3)));
         assertThrows(IllegalArgumentException.class, () ->
@@ -63,9 +76,13 @@ class TelemetryBatchPersistenceEventAssemblerTest {
     }
 
     private TelemetryBatchAcceptedV1 event(UUID eventId, double x, Instant receivedAt) {
+        return event(eventId, x, receivedAt, "trace");
+    }
+
+    private TelemetryBatchAcceptedV1 event(UUID eventId, double x, Instant receivedAt, String traceId) {
         return new TelemetryBatchAcceptedV1(1, eventId, batchId, sessionId, streamId, 3,
                 Instant.parse("2026-09-17T10:00:00Z"), Instant.parse("2026-09-17T10:00:01Z"),
-                receivedAt, UUID.randomUUID(), "trace",
+                receivedAt, UUID.randomUUID(), traceId,
                 List.of(new TelemetryBatchAcceptedV1.GazeSampleV1(0, x, .8, .9)),
                 List.of(new TelemetryBatchAcceptedV1.GameplaySampleV1(1, .1, .2, .3, .4, 12, 1.5, .6)));
     }
