@@ -116,6 +116,75 @@ class TherapySessionConfigurationBindingPersistenceTest {
     }
 
     @Test
+    void expiredLeaseWithoutActivityIsPersistedAndAllowsANewStart() {
+        var old = persistExpiredSession("expired-no-activity", false);
+
+        var newStart = starter.handle(command("fresh-after-expiry"));
+
+        assertEquals(StartTherapySessionResult.Outcome.CREATED, newStart.outcome());
+        var failed = sessions.findById(old.id()).orElseThrow();
+        assertEquals(TherapySessionStatus.FAILED_TECHNICAL, failed.status());
+        assertEquals("SESSION_LEASE_EXPIRED", failed.terminationReason().orElseThrow());
+        assertFalse(failed.consumesDailyQuota());
+        assertEquals(1, sessions.countConsumedSlots(PLAN_ID, failed.quotaDate()));
+        assertEquals(StartTherapySessionResult.Outcome.IDEMPOTENT_REPLAY,
+                starter.handle(command("expired-no-activity")).outcome());
+        assertEquals(2, countRows("therapy_sessions"));
+    }
+
+    @Test
+    void expiredMeaningfulLeaseRemainsFailedAndConsumedWhenQuotaRejectsNewStart() {
+        plans.save(TherapyPlan.rehydrate(PLAN_ID, PATIENT_ID, DOCTOR, TherapyPlanStatus.ACTIVE,
+                1, 1, 30, 60, 5, 15, 50,
+                Map.of(new ExerciseCode("visual-search"), 1)));
+        var old = persistExpiredSession("expired-meaningful", true);
+
+        assertThrows(TherapySessionStartConflictException.class,
+                () -> starter.handle(command("blocked-after-expiry")));
+
+        var failed = sessions.findById(old.id()).orElseThrow();
+        assertEquals(TherapySessionStatus.FAILED_TECHNICAL, failed.status());
+        assertTrue(failed.consumesDailyQuota());
+        assertEquals(300, failed.activeDurationSeconds());
+        assertEquals(1, sessions.countConsumedSlots(PLAN_ID, failed.quotaDate()));
+        assertEquals(300, sessions.sumExposureSeconds(PLAN_ID, failed.quotaDate()));
+        assertEquals(1, countRows("therapy_sessions"));
+    }
+
+    @Test
+    void unrelatedConfigurationFailureStillRollsBackTheExpiredLeaseTransition() {
+        var old = persistExpiredSession("expired-before-config-error", false);
+        var unsupported = new StartTherapySessionCommand(PATIENT_ID, PLAN_ID,
+                new ExerciseCode("fixation"), new IdempotencyKey("missing-config"));
+
+        assertThrows(TherapySessionConfigurationUnavailableException.class,
+                () -> starter.handle(unsupported));
+
+        assertEquals(TherapySessionStatus.ACTIVE, sessions.findById(old.id()).orElseThrow().status());
+        assertEquals(1, countRows("therapy_sessions"));
+    }
+
+    private TherapySession persistExpiredSession(String key, boolean meaningfulActivity) {
+        var intent = command(key);
+        var createdAt = Instant.now().minusSeconds(600);
+        return QuarkusTransaction.requiringNew().call(() -> {
+            var configuration = configurations.findEffective(PLAN_ID, TherapeuticExercise.VISUAL_SEARCH, createdAt)
+                    .orElseThrow();
+            var session = TherapySession.start(new TherapySessionId(UUID.randomUUID()),
+                    plans.findById(PLAN_ID).orElseThrow(), intent.exerciseCode(),
+                    createdAt.atZone(StartTherapySessionCommandService.QUOTA_ZONE).toLocalDate(),
+                    TherapeuticConfigurationSnapshot.from(configuration), intent.idempotencyKey(),
+                    StartTherapySessionRequestFingerprint.compute(intent), createdAt, createdAt.plusSeconds(120));
+            if (meaningfulActivity) {
+                session.recordAcceptedActivity(Duration.ofMinutes(5), 50,
+                        createdAt.plusSeconds(60), createdAt.plusSeconds(180));
+            }
+            sessions.save(session);
+            return session;
+        });
+    }
+
+    @Test
     void persistsExactCanonicalSnapshotAndKeepsItAfterLaterConfigurationAppend() throws Exception {
         var created = starter.handle(command("binding-1"));
 

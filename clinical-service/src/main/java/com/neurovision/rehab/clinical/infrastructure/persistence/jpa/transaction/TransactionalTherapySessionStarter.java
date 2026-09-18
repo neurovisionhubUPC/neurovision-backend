@@ -18,13 +18,14 @@ public class TransactionalTherapySessionStarter implements PatientTherapySession
         this.patientDelegate = Objects.requireNonNull(patientDelegate);
     }
 
-    @Transactional
+    // Preserve lease expiry only for a known admission conflict, not arbitrary failures.
+    @Transactional(dontRollbackOn = TherapySessionStartConflictException.class)
     public StartTherapySessionResult handle(StartTherapySessionCommand command) {
         return delegate.handle(command);
     }
 
     @Override
-    @Transactional
+    @Transactional(dontRollbackOn = TherapySessionStartConflictException.class)
     public StartTherapySessionResult handle(CognitoSubject patientSubject, TherapyPlanId planId,
             ExerciseCode exerciseCode, IdempotencyKey key) {
         return patientDelegate.handle(patientSubject, planId, exerciseCode, key);

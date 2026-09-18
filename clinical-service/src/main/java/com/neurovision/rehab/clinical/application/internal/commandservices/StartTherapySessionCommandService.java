@@ -8,6 +8,7 @@ import com.neurovision.rehab.clinical.application.ports.out.persistence.Therapeu
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapyPlanRevision;
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapySession;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapySessionId;
+import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapySessionStatus;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticConfigurationSnapshot;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticConfigurationStatus;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticExercise;
@@ -77,10 +78,22 @@ public final class StartTherapySessionCommandService {
                     StartTherapySessionResult.Outcome.IDEMPOTENT_REPLAY, previous.get());
         }
 
-        var active = sessionRepository.findActiveByPatient(command.clinicalPatientId());
-        if (active.isPresent()) throw TherapySessionStartConflictException.activeSession(active.get().id());
-
         var now = clock.instant();
+        var active = sessionRepository.findActiveByPatient(command.clinicalPatientId());
+        boolean expiredLease = false;
+        if (active.isPresent()) {
+            // A concurrent transition may have completed after the active lookup.
+            var current = sessionRepository.findByIdForUpdate(active.get().id()).orElseThrow();
+            if (current.status() == TherapySessionStatus.ACTIVE) {
+                if (now.isBefore(current.leaseExpiresAt().orElseThrow())) {
+                    throw TherapySessionStartConflictException.activeSession(current.id());
+                }
+                current.expireLease(now);
+                sessionRepository.save(current);
+                expiredLease = true;
+            }
+        }
+
         var plan = TherapyPlanRevision.applyEligible(basePlan,
                 revisionRepository.findEffective(basePlan.id(), now), now);
         var therapeuticExercise = TherapeuticExercise.from(command.exerciseCode());
@@ -92,11 +105,16 @@ public final class StartTherapySessionCommandService {
                 .orElseThrow(TherapySessionConfigurationUnavailableException::new);
 
         var quotaDate = now.atZone(QUOTA_ZONE).toLocalDate();
-        plan.validateAdmission(
-                command.exerciseCode(),
-                sessionRepository.countConsumedSlots(plan.id(), quotaDate),
-                sessionRepository.countConsumedExerciseSlots(plan.id(), quotaDate, command.exerciseCode()),
-                sessionRepository.sumExposureSeconds(plan.id(), quotaDate));
+        long consumedSlots = sessionRepository.countConsumedSlots(plan.id(), quotaDate);
+        long consumedExerciseSlots = sessionRepository.countConsumedExerciseSlots(
+                plan.id(), quotaDate, command.exerciseCode());
+        long exposureSeconds = sessionRepository.sumExposureSeconds(plan.id(), quotaDate);
+        try {
+            plan.validateAdmission(command.exerciseCode(), consumedSlots, consumedExerciseSlots, exposureSeconds);
+        } catch (IllegalStateException denied) {
+            if (!expiredLease) throw denied;
+            throw TherapySessionStartConflictException.admissionDenied();
+        }
         var session = TherapySession.start(new TherapySessionId(idSupplier.get()), plan,
                 command.exerciseCode(), quotaDate, TherapeuticConfigurationSnapshot.from(configuration),
                 command.idempotencyKey(), fingerprint,

@@ -95,6 +95,57 @@ class StartTherapySessionCommandServiceTest {
     }
 
     @Test
+    void expiredSessionWithoutMeaningfulActivityReleasesItsSlotForNewAdmission() {
+        var expired = expiredSession("expired-attempt", false);
+        sessions.save(expired);
+
+        var result = service.handle(command("fresh-attempt", "visual-search"));
+
+        assertEquals(StartTherapySessionResult.Outcome.CREATED, result.outcome());
+        assertEquals(TherapySessionStatus.FAILED_TECHNICAL, expired.status());
+        assertEquals("SESSION_LEASE_EXPIRED", expired.terminationReason().orElseThrow());
+        assertFalse(expired.consumesDailyQuota());
+        assertEquals(1, sessions.countConsumedSlots(plans.plan.id(), expired.quotaDate()));
+        assertEquals(0, sessions.sumExposureSeconds(plans.plan.id(), expired.quotaDate()));
+        assertEquals(List.of("plan-lock", "assignment-lock", "patient-lock"), plans.lockOrder);
+        assertEquals(StartTherapySessionResult.Outcome.IDEMPOTENT_REPLAY,
+                service.handle(command("expired-attempt", "visual-search")).outcome());
+        assertEquals(2, sessions.stored.size());
+    }
+
+    @Test
+    void expiredSessionWithMeaningfulActivityStillConsumesItsPrescribedExerciseSlot() {
+        var expired = expiredSession("meaningful-attempt", true);
+        sessions.save(expired);
+
+        assertThrows(TherapySessionStartConflictException.class,
+                () -> service.handle(command("new-attempt", "visual-search")));
+
+        assertEquals(TherapySessionStatus.FAILED_TECHNICAL, expired.status());
+        assertTrue(expired.consumesDailyQuota());
+        assertEquals(1, sessions.countConsumedSlots(plans.plan.id(), expired.quotaDate()));
+        assertEquals(1, sessions.countConsumedExerciseSlots(plans.plan.id(), expired.quotaDate(),
+                new ExerciseCode("visual-search")));
+        assertEquals(300, sessions.sumExposureSeconds(plans.plan.id(), expired.quotaDate()));
+        assertEquals(1, sessions.stored.size());
+    }
+
+    private TherapySession expiredSession(String key, boolean meaningful) {
+        var intent = command(key, "visual-search");
+        var startedAt = NOW.minusSeconds(480);
+        var session = TherapySession.start(new TherapySessionId(UUID.randomUUID()), plans.plan,
+                intent.exerciseCode(), NOW.atZone(StartTherapySessionCommandService.QUOTA_ZONE).toLocalDate(),
+                TherapeuticConfigurationSnapshot.from(configurations.values.get(0)),
+                intent.idempotencyKey(), StartTherapySessionRequestFingerprint.compute(intent),
+                startedAt, startedAt.plusSeconds(120));
+        if (meaningful) {
+            session.recordAcceptedActivity(Duration.ofMinutes(5), 50,
+                    startedAt.plusSeconds(60), startedAt.plusSeconds(180));
+        }
+        return session;
+    }
+
+    @Test
     void preservesSessionExerciseAndSafetyAdmissionRules() {
         sessions.consumedSlots = 3;
         assertThrows(IllegalStateException.class, () -> service.handle(command("quota", "visual-search")));
@@ -250,12 +301,25 @@ class StartTherapySessionCommandServiceTest {
         @Override public Optional<TherapySession> findByIdForUpdate(TherapySessionId sessionId) {
             return stored.stream().filter(s -> s.id().equals(sessionId)).findFirst();
         }
-        @Override public long countConsumedSlots(TherapyPlanId planId, LocalDate quotaDate) { return consumedSlots; }
-        @Override public long countConsumedExerciseSlots(TherapyPlanId planId, LocalDate quotaDate, ExerciseCode exerciseCode) {
-            return consumedExerciseSlots.getOrDefault(exerciseCode, 0L);
+        @Override public long countConsumedSlots(TherapyPlanId planId, LocalDate quotaDate) {
+            return consumedSlots + stored.stream().filter(s -> s.therapyPlanId().equals(planId)
+                    && s.quotaDate().equals(quotaDate) && s.consumesDailyQuota()).count();
         }
-        @Override public long sumExposureSeconds(TherapyPlanId planId, LocalDate quotaDate) { return exposureSeconds; }
-        @Override public void save(TherapySession session) { saveCalls++; stored.add(session); }
+        @Override public long countConsumedExerciseSlots(TherapyPlanId planId, LocalDate quotaDate, ExerciseCode exerciseCode) {
+            return consumedExerciseSlots.getOrDefault(exerciseCode, 0L)
+                    + stored.stream().filter(s -> s.therapyPlanId().equals(planId)
+                            && s.quotaDate().equals(quotaDate) && s.exerciseCode().equals(exerciseCode)
+                            && s.consumesDailyQuota()).count();
+        }
+        @Override public long sumExposureSeconds(TherapyPlanId planId, LocalDate quotaDate) {
+            return exposureSeconds + stored.stream().filter(s -> s.therapyPlanId().equals(planId)
+                    && s.quotaDate().equals(quotaDate)).mapToLong(TherapySession::activeDurationSeconds).sum();
+        }
+        @Override public void save(TherapySession session) {
+            saveCalls++;
+            stored.removeIf(existing -> existing.id().equals(session.id()));
+            stored.add(session);
+        }
     }
 
     private static final class FakeRevisionRepository implements TherapyPlanRevisionRepository {

@@ -19,6 +19,8 @@ import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyP
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapySessionRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapeuticExerciseConfigurationRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyPlanRevisionRepository;
+import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticExerciseParameters;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import java.time.Clock;
@@ -26,6 +28,11 @@ import java.time.Duration;
 import java.util.UUID;
 
 @ApplicationScoped
+@RegisterForReflection(targets = {
+        TherapeuticExerciseParameters.VisualScanning.class,
+        TherapeuticExerciseParameters.VisualSearch.class,
+        TherapeuticExerciseParameters.Fixation.class
+})
 public class ApplicationServicesConfiguration {
 
     @Produces

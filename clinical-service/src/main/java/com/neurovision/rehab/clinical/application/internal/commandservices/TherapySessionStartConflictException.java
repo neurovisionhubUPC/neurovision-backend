@@ -19,5 +19,9 @@ public final class TherapySessionStartConflictException extends RuntimeException
         return new TherapySessionStartConflictException("Patient already has an active therapy session", id);
     }
 
+    public static TherapySessionStartConflictException admissionDenied() {
+        return new TherapySessionStartConflictException("Therapy session admission is not permitted", null);
+    }
+
     public Optional<TherapySessionId> activeSessionId() { return Optional.ofNullable(activeSessionId); }
 }
