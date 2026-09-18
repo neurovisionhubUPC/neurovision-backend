@@ -1,0 +1,7 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: clinical-service
+          image: neurovision/clinical-service:k3d-v6-20260918-6075a290
+          imagePullPolicy: Never

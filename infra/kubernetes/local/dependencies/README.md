@@ -1,8 +1,8 @@
 # Provision local data dependencies
 
-This local-only overlay runs one PostgreSQL instance per service and one
-single-node Apache Kafka broker inside the k3d cluster. It is intentionally not
-a production topology.
+This local-only overlay runs separate PostgreSQL databases for IAM, Profile,
+and Clinical, one TimescaleDB database for Telemetry, and one single-node
+Apache Kafka broker inside k3d. It is intentionally not a production topology.
 
 ## Quick path
 
@@ -19,6 +19,7 @@ kubectl apply -k .\infra\kubernetes\local\dependencies
 kubectl rollout status statefulset/iam-postgresql -n neurovision --timeout=180s
 kubectl rollout status statefulset/profile-postgresql -n neurovision --timeout=180s
 kubectl rollout status statefulset/clinical-postgresql -n neurovision --timeout=180s
+kubectl rollout status statefulset/telemetry-timescaledb -n neurovision --timeout=180s
 kubectl rollout status statefulset/kafka -n neurovision --timeout=300s
 kubectl wait --for=condition=complete job/kafka-topics -n neurovision --timeout=180s
 ```
@@ -30,11 +31,17 @@ kubectl wait --for=condition=complete job/kafka-topics -n neurovision --timeout=
 | IAM PostgreSQL | `iam-postgresql:5432` | 1 GiB `local-path` PVC |
 | Profile PostgreSQL | `profile-postgresql:5432` | 1 GiB `local-path` PVC |
 | Clinical PostgreSQL | `clinical-postgresql:5432` | 1 GiB `local-path` PVC |
+| Telemetry TimescaleDB | `telemetry-timescaledb:5432` | 1 GiB `local-path` PVC |
 | Apache Kafka | `kafka:9092` | 2 GiB `local-path` PVC |
 
 Kafka runs as a single combined KRaft broker/controller. Topic auto-creation is
 disabled; the `kafka-topics` Job creates application, DLQ, and replay-audit
 topics idempotently.
+
+TimescaleDB uses the pinned `timescale/timescaledb:2.30.1-pg17` image from
+Compose but a separate k3d volume. Telemetry, not this dependency overlay,
+owns Flyway V1–V3 migration at its first startup. Existing k3d Clinical data
+is not copied or reset by adding this new database.
 
 ## Verify
 

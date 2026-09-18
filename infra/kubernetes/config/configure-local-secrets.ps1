@@ -79,6 +79,29 @@ function Ensure-DatabaseSecret {
     Apply-SecretFromEnvFile -Name $Name -SecretNamespace $SecretNamespace -Path $envFile
 }
 
+function Ensure-TelemetryDatabaseSecret {
+    param(
+        [string]$SecretNamespace,
+        [string]$TemporaryDirectory,
+        [bool]$Rotate
+    )
+
+    $name = "telemetry-database-credentials"
+    $existingSecret = & kubectl get secret $name --namespace $SecretNamespace --ignore-not-found -o name
+    Assert-LastExitCode "Checking Secret $SecretNamespace/$name"
+    if ($existingSecret -and -not $Rotate) {
+        Write-Output "Secret $SecretNamespace/$name already exists; its password was preserved."
+        return
+    }
+
+    $envFile = Join-Path $TemporaryDirectory "$name.env"
+    @(
+        "TELEMETRY_DB_USERNAME=neurovision_telemetry"
+        "TELEMETRY_DB_PASSWORD=$(New-RandomSecret)"
+    ) | Set-Content -LiteralPath $envFile -Encoding Ascii
+    Apply-SecretFromEnvFile -Name $name -SecretNamespace $SecretNamespace -Path $envFile
+}
+
 $currentContext = (& kubectl config current-context).Trim()
 Assert-LastExitCode "Reading the current Kubernetes context"
 if ($currentContext -ne $ExpectedContext) {
@@ -95,6 +118,7 @@ try {
     Ensure-DatabaseSecret -Name "iam-database-credentials" -Username "neurovision_iam" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
     Ensure-DatabaseSecret -Name "profile-database-credentials" -Username "neurovision_profile" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
     Ensure-DatabaseSecret -Name "clinical-database-credentials" -Username "neurovision_clinical" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
+    Ensure-TelemetryDatabaseSecret -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
 
     if (-not $SkipAws) {
         $awsCli = Join-Path $env:LOCALAPPDATA "Programs\Amazon\AWSCLIV2\aws.exe"

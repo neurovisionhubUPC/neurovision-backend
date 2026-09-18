@@ -18,9 +18,11 @@ The script refuses to write unless the active context is
 | `iam-service-config` | `neurovision` | Cognito identifiers, Kafka address, and IAM database URL |
 | `profile-service-config` | `neurovision` | OIDC identifiers, Kafka address, and Profile database URL |
 | `clinical-service-config` | `neurovision` | OIDC identifiers, Kafka address, and Clinical database URL |
+| `telemetry-service-config` | `neurovision` | OIDC identifiers, Kafka/Clinical addresses, Telemetry database URLs, and local-only bounds |
 | `iam-database-credentials` | `neurovision` | Stable generated IAM database credentials |
 | `profile-database-credentials` | `neurovision` | Stable generated Profile database credentials |
 | `clinical-database-credentials` | `neurovision` | Stable generated Clinical database credentials |
+| `telemetry-database-credentials` | `neurovision` | Stable generated Telemetry TimescaleDB credentials |
 | `iam-aws-credentials` | `neurovision` | Temporary credentials exported from the limited AWS role |
 | `neurovision-local-tls` | `kube-system` | Local HTTPS certificate consumed by the Traefik Gateway |
 
@@ -41,6 +43,8 @@ rotated in the same operation.
 ## Safety notes
 
 - Database passwords are generated only when their Secrets do not exist.
+- For the Telemetry rehearsal, `-SkipAws -SkipTls` creates the missing database
+  Secret without refreshing AWS credentials or changing the local certificate.
 - AWS credentials are freshly assumed from the limited role configured by the
   `neurovision-iam-dev` profile and are never printed.
 - TLS files are generated under the system temporary directory and removed afterward.

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import com.neurovision.rehab.telemetry.interfaces.rest.resource.TelemetryBatchV1;
+import com.neurovision.rehab.telemetry.interfaces.rest.resource.TelemetrySamplesPageV1;
 import com.neurovision.rehab.telemetry.interfaces.events.contracts.TelemetryBatchAcceptedV1;
 import com.neurovision.rehab.telemetry.domain.model.valueobjects.TelemetryBatch;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -12,13 +13,15 @@ import org.junit.jupiter.api.Test;
 
 class TelemetryNativeReflectionConfigurationTest {
     @Test
-    void registersEveryPublicRecordUsedByManualBatchCodecs() {
+    void registersEveryRestAndEventRecordUsedByNativeJackson() {
         var registration = TelemetryNativeReflectionConfiguration.class.getAnnotation(RegisterForReflection.class);
 
         assertNotNull(registration);
         assertEquals(Set.of(TelemetryBatchV1.class,
                         TelemetryBatchV1.GazeSampleV1.class,
                         TelemetryBatchV1.GameplaySampleV1.class,
+                        TelemetrySamplesPageV1.class,
+                        TelemetrySamplesPageV1.SampleV1.class,
                         TelemetryBatchAcceptedV1.class,
                         TelemetryBatchAcceptedV1.GazeSampleV1.class,
                         TelemetryBatchAcceptedV1.GameplaySampleV1.class,

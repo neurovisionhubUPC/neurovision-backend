@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telemetry-service-config
+  namespace: neurovision
+  labels:
+    app.kubernetes.io/name: telemetry-service
+    app.kubernetes.io/component: telemetry
+    app.kubernetes.io/part-of: neurovision-rehab
+data:
+  COGNITO_CLIENT_ID: 52rlcllcsdk0rdvbqebe8efbpm
+  COGNITO_ISSUER_URL: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_6eG3zLkZ2
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  TELEMETRY_DB_JDBC_URL: jdbc:postgresql://telemetry-timescaledb:5432/neurovision_telemetry
+  TELEMETRY_DB_REACTIVE_URL: postgresql://telemetry-timescaledb:5432/neurovision_telemetry
+  CLINICAL_INTERNAL_BASE_URL: http://clinical-service:8080
+  TELEMETRY_KAFKA_DELIVERY_TIMEOUT_MS: "10000"
+  TELEMETRY_KAFKA_REQUEST_TIMEOUT_MS: "3000"
+  TELEMETRY_KAFKA_MAX_BLOCK_MS: "3000"
+  TELEMETRY_KAFKA_BUFFER_BYTES: "1048576"
+  TELEMETRY_KAFKA_ACK_TIMEOUT_MS: "12000"
+  TELEMETRY_MAX_EVENT_BYTES: "1048576"
+  TELEMETRY_MAX_REQUEST_BYTES: 512K
+  TELEMETRY_MAX_SAMPLES: "1000"
+  TELEMETRY_MAX_FUTURE_SKEW_SECONDS: "60"
+  TELEMETRY_MAX_CONCURRENT_REQUESTS: "8"
+  TELEMETRY_MAX_BATCHES_PER_SECOND: "20"
+  TELEMETRY_CLINICAL_TIMEOUT_MS: "1500"
