@@ -22,7 +22,10 @@ public class ClinicalAuthorizationStubResource implements QuarkusTestResourceLif
                 var path = exchange.getRequestURI().getPath();
                 var expected = "/api/internal/v1/therapy-sessions/" + ALLOWED_SESSION
                         + "/telemetry-authorization";
-                int status = path.equals(expected) && credential != null ? 200 : 403;
+                var expectedRead = "/api/internal/v1/therapy-sessions/" + ALLOWED_SESSION
+                        + "/telemetry-read-authorization";
+                int status = (path.equals(expected) || path.equals(expectedRead))
+                        && credential != null ? 200 : 403;
                 var body = status == 200
                         ? "{\"contractVersion\":1,\"permitted\":true,\"therapySessionId\":\""
                                 + ALLOWED_SESSION + "\"}"

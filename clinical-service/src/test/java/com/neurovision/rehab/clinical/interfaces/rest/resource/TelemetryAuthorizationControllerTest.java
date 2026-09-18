@@ -105,7 +105,50 @@ class TelemetryAuthorizationControllerTest {
         given().get(url(sessionId)).then().statusCode(403);
     }
 
+    @Test
+    @TestSecurity(user = "patient", roles = "PATIENT")
+    @OidcSecurity(claims = @Claim(key = "sub", value = SUBJECT))
+    void historicalReadAllowsOwnerIncludingAfterSessionEnds() {
+        given().get(readUrl(sessionId)).then().statusCode(200).body("permitted", org.hamcrest.Matchers.is(true));
+        QuarkusTransaction.requiringNew().run(() -> entityManager.createNativeQuery(
+                        "UPDATE therapy_sessions SET status = 'COMPLETED', lease_expires_at = NULL, "
+                                + "ended_at = now() WHERE id = :id")
+                .setParameter("id", sessionId).executeUpdate());
+        given().get(readUrl(sessionId)).then().statusCode(200).body("permitted", org.hamcrest.Matchers.is(true));
+    }
+
+    @Test
+    @TestSecurity(user = "doctor", roles = "DOCTOR")
+    @OidcSecurity(claims = @Claim(key = "sub", value = "telemetry-test-doctor"))
+    void historicalReadAllowsAssignedDoctorButNotAfterRevocation() {
+        given().get(readUrl(sessionId)).then().statusCode(200);
+        QuarkusTransaction.requiringNew().run(() -> entityManager.createNativeQuery(
+                        "UPDATE doctor_patient_assignments SET status = 'ENDED', ended_at = now() "
+                                + "WHERE doctor_cognito_sub = :doctor")
+                .setParameter("doctor", DOCTOR.value()).executeUpdate());
+        given().get(readUrl(sessionId)).then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "patient", roles = "PATIENT")
+    @OidcSecurity(claims = @Claim(key = "sub", value = "other-subject"))
+    void historicalReadUsesGenericDenialForUnknownOrMalformedSession() {
+        var denied = given().get(readUrl(sessionId)).then().statusCode(403).extract().asString();
+        assertEquals(denied, given().get(readUrl(UUID.randomUUID())).then().statusCode(403)
+                .extract().asString());
+        assertEquals(denied, given().get(ROOT + "invalid/telemetry-read-authorization")
+                .then().statusCode(403).extract().asString());
+    }
+
+    @Test
+    @TestSecurity(user = "dual", roles = {"PATIENT", "DOCTOR"})
+    @OidcSecurity(claims = @Claim(key = "sub", value = SUBJECT))
+    void historicalReadRejectsAmbiguousDualRole() {
+        given().get(readUrl(sessionId)).then().statusCode(403);
+    }
+
     private static String url(UUID id) { return ROOT + id + "/telemetry-authorization"; }
+    private static String readUrl(UUID id) { return ROOT + id + "/telemetry-read-authorization"; }
 
     private void clean() {
         QuarkusTransaction.requiringNew().run(() -> {
