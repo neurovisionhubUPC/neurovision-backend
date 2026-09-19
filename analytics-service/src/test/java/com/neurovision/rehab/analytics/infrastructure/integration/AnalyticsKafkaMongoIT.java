@@ -140,6 +140,8 @@ class AnalyticsKafkaMongoIT {
                 .await().atMost(Duration.ofSeconds(5)));
         assertBaselineProjection(summary(summaries, identity));
 
+        verifyLegacyInboxCompatibility(inbox, summaries, fixture, published);
+
         try (var producer = producer()) {
             ObjectNode batchConflict = fixture.deepCopy();
             batchConflict.put("eventId", UUID.randomUUID().toString());
@@ -172,6 +174,66 @@ class AnalyticsKafkaMongoIT {
 
         verifyAtomicProjectionConvergence(summaries);
         verifyMalformedHistoricalRowFailsClosed(inbox);
+    }
+
+    private void verifyLegacyInboxCompatibility(
+            io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> inbox,
+            io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> summaries,
+            ObjectNode fixture, List<Published> published) throws Exception {
+        var identity = new TelemetryStreamIdentity(UUID.randomUUID(), UUID.randomUUID());
+        var legacyBatchId = UUID.randomUUID();
+        var source = inbox.find().collect().first().await().atMost(Duration.ofSeconds(5));
+        var legacy = new Document(source)
+                .append("_id", legacyBatchId.toString())
+                .append("batchId", legacyBatchId.toString())
+                .append("attemptEventId", UUID.randomUUID().toString())
+                .append("therapySessionId", identity.therapySessionId().toString())
+                .append("streamId", identity.streamId().toString())
+                .append("sequence", 0L)
+                .append("admissionQuality", "INITIAL");
+        legacy.remove("inboxSchemaVersion");
+        legacy.remove("correlationId");
+        inbox.insertOne(legacy).await().atMost(Duration.ofSeconds(5));
+
+        var current = fixture.deepCopy();
+        current.put("eventId", UUID.randomUUID().toString());
+        var currentBatchId = UUID.randomUUID();
+        current.put("batchId", currentBatchId.toString());
+        current.put("therapySessionId", identity.therapySessionId().toString());
+        current.put("streamId", identity.streamId().toString());
+        current.put("sequence", 1L);
+        current.put("correlationId", UUID.randomUUID().toString());
+        var key = identity.therapySessionId() + ":" + identity.streamId();
+
+        try (var producer = producer()) {
+            published.add(send(producer, key, current));
+            producer.flush();
+        }
+
+        await(Duration.ofSeconds(20), () -> admittedBatchCount(summaries, identity) == 2);
+        var reconstructed = inboxAdapter.loadCompleteStream(identity).await().atMost(Duration.ofSeconds(5));
+        assertEquals(2, reconstructed.admittedBatchCount());
+        assertEquals(List.of(0L, 1L), reconstructed.batches().stream()
+                .map(batch -> batch.batch().sequence()).toList());
+        assertEquals(UUID.nameUUIDFromBytes(("legacy-inbox:" + legacyBatchId)
+                        .getBytes(StandardCharsets.UTF_8)),
+                reconstructed.batches().get(0).batch().correlationId());
+
+        var legacyPersisted = inbox.find(eq("batchId", legacyBatchId.toString())).collect().first()
+                .await().atMost(Duration.ofSeconds(5));
+        assertFalse(legacyPersisted.containsKey("inboxSchemaVersion"));
+        assertFalse(legacyPersisted.containsKey("correlationId"));
+        var currentPersisted = inbox.find(eq("batchId", currentBatchId.toString())).collect().first()
+                .await().atMost(Duration.ofSeconds(5));
+        assertEquals(2, currentPersisted.getInteger("inboxSchemaVersion"));
+        var projected = summary(summaries, identity);
+        assertEquals(2L, projected.getLong("admittedBatchCount"));
+        assertEquals(2L, projected.get("summary", Document.class)
+                .get("sampleCounts", Document.class).getLong("gaze"));
+        assertTrue(consumeDlq(1, Duration.ofSeconds(2)).isEmpty());
+
+        var last = published.get(published.size() - 1);
+        await(Duration.ofSeconds(15), () -> committedOffset(last.partition()) >= last.offset() + 1);
     }
 
     private void assertBaselineProjection(Document projected) {
