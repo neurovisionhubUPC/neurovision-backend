@@ -3,17 +3,31 @@ package com.neurovision.rehab.analytics.infrastructure.integration;
 import static com.mongodb.client.model.Filters.eq;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.neurovision.rehab.analytics.application.ports.out.persistence.StreamSummaryProjectionPort;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.AdmittedTelemetryBatch;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.AnalyticsProjectionIdentity;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.StreamSummaryProjection;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryStreamIdentity;
+import com.neurovision.rehab.analytics.domain.services.BaselineTelemetryMetricsCalculator;
+import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoStreamSummaryProjectionAdapter;
+import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoTelemetryInboxAdapter;
 import io.quarkus.mongodb.reactive.ReactiveMongoClient;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
+import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -31,6 +45,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.junit.jupiter.api.Test;
 
@@ -46,21 +61,30 @@ class AnalyticsKafkaMongoIT {
     @Inject @ConfigProperty(name = "kafka.bootstrap.servers") String bootstrapServers;
     @Inject @ConfigProperty(name = "quarkus.mongodb.database") String database;
     @Inject @ConfigProperty(name = "analytics.inbox.collection") String collectionName;
+    @Inject @ConfigProperty(name = "analytics.summary.collection") String summaryCollectionName;
+    @Inject MongoTelemetryInboxAdapter inboxAdapter;
+    @Inject MongoStreamSummaryProjectionAdapter summaryAdapter;
 
     @Test
-    void admitsOrdersDeduplicatesAndQuarantinesBeforeCommittingOffsets() throws Exception {
+    void admitsProjectsRecoversAndConvergesBeforeCommittingOffsets() throws Exception {
         var inbox = mongo.get().getDatabase(database).getCollection(collectionName);
+        var summaries = mongo.get().getDatabase(database).getCollection(summaryCollectionName);
         assertEquals(0, inbox.countDocuments().await().atMost(Duration.ofSeconds(5)));
+        assertEquals(0, summaries.countDocuments().await().atMost(Duration.ofSeconds(5)));
 
         var fixture = (ObjectNode) mapper.readTree(new String(getClass().getResourceAsStream(
                 "/fixtures/telemetry/v1/accepted-event-wire.json").readAllBytes(), StandardCharsets.UTF_8));
         var key = fixture.get("therapySessionId").asText() + ":" + fixture.get("streamId").asText();
+        var identity = new TelemetryStreamIdentity(
+                UUID.fromString(fixture.get("therapySessionId").asText()),
+                UUID.fromString(fixture.get("streamId").asText()));
         var published = new ArrayList<Published>();
 
         try (var producer = producer()) {
             published.add(send(producer, key, fixture));
 
             var inOrder = variant(fixture, 4);
+            inOrder.remove("traceId");
             published.add(send(producer, key, inOrder));
 
             var gap = variant(fixture, 6);
@@ -68,12 +92,55 @@ class AnalyticsKafkaMongoIT {
 
             var late = variant(fixture, 5);
             published.add(send(producer, key, late));
+            producer.flush();
+        }
 
+        await(Duration.ofSeconds(20), () -> count(inbox) == 4);
+        await(Duration.ofSeconds(20), () -> admittedBatchCount(summaries, identity) == 4);
+        assertEquals(Map.of(3L, "INITIAL", 4L, "IN_ORDER", 5L, "LATE_ARRIVAL", 6L, "GAP_DETECTED"),
+                admissionQualities(inbox));
+
+        var inboxIndexes = inbox.listIndexes().collect().asList().await().atMost(Duration.ofSeconds(5));
+        assertUniqueIndex(inboxIndexes, "uq_analytics_batch_id", new Document("batchId", 1));
+        assertUniqueIndex(inboxIndexes, "uq_analytics_stream_sequence",
+                new Document("therapySessionId", 1).append("streamId", 1).append("sequence", 1));
+        var summaryIndexes = summaries.listIndexes().collect().asList().await().atMost(Duration.ofSeconds(5));
+        assertUniqueIndex(summaryIndexes, "uq_analytics_stream_calculation",
+                new Document("therapySessionId", 1).append("streamId", 1)
+                        .append("calculationVersion", 1));
+
+        var reconstructed = inboxAdapter.loadCompleteStream(identity).await().atMost(Duration.ofSeconds(5));
+        assertEquals(4, reconstructed.admittedBatchCount());
+        assertEquals(List.of(3L, 4L, 5L, 6L), reconstructed.batches().stream()
+                .map(batch -> batch.batch().sequence()).toList());
+        var correlationId = UUID.fromString(fixture.get("correlationId").asText());
+        assertTrue(reconstructed.batches().stream()
+                .allMatch(batch -> correlationId.equals(batch.batch().correlationId())));
+        assertEquals("synthetic-trace", reconstructed.batches().get(0).batch().traceId());
+        assertNull(reconstructed.batches().get(1).batch().traceId());
+        assertEquals("synthetic-trace", reconstructed.batches().get(2).batch().traceId());
+
+        assertBaselineProjection(summary(summaries, identity));
+
+        summaries.deleteOne(summaryIdentity(identity)).await().atMost(Duration.ofSeconds(5));
+        assertEquals(0, summaries.countDocuments(summaryIdentity(identity))
+                .await().atMost(Duration.ofSeconds(5)));
+
+        try (var producer = producer()) {
             ObjectNode duplicateAttempt = fixture.deepCopy();
             duplicateAttempt.put("eventId", UUID.randomUUID().toString());
             duplicateAttempt.put("serverReceivedAt", "2026-09-17T10:00:03Z");
             published.add(send(producer, key, duplicateAttempt));
+            producer.flush();
+        }
 
+        await(Duration.ofSeconds(20), () -> admittedBatchCount(summaries, identity) == 4);
+        assertEquals(4, count(inbox));
+        assertEquals(1, summaries.countDocuments(summaryIdentity(identity))
+                .await().atMost(Duration.ofSeconds(5)));
+        assertBaselineProjection(summary(summaries, identity));
+
+        try (var producer = producer()) {
             ObjectNode batchConflict = fixture.deepCopy();
             batchConflict.put("eventId", UUID.randomUUID().toString());
             ((ObjectNode) batchConflict.withArray("gameplaySamples").get(0)).put("score", 13);
@@ -91,15 +158,6 @@ class AnalyticsKafkaMongoIT {
             producer.flush();
         }
 
-        await(Duration.ofSeconds(20), () -> count(inbox) == 4);
-        assertEquals(Map.of(3L, "INITIAL", 4L, "IN_ORDER", 5L, "LATE_ARRIVAL", 6L, "GAP_DETECTED"),
-                admissionQualities(inbox));
-
-        var indexes = inbox.listIndexes().collect().asList().await().atMost(Duration.ofSeconds(5));
-        assertUniqueIndex(indexes, "uq_analytics_batch_id", new Document("batchId", 1));
-        assertUniqueIndex(indexes, "uq_analytics_stream_sequence",
-                new Document("therapySessionId", 1).append("streamId", 1).append("sequence", 1));
-
         var dlq = consumeDlq(3, Duration.ofSeconds(15));
         assertEquals(3, dlq.size());
         assertEquals(Map.of("BATCH_CONFLICT", 1L, "SEQUENCE_CONFLICT", 1L, "INVALID_EVENT", 1L),
@@ -111,6 +169,83 @@ class AnalyticsKafkaMongoIT {
         var last = published.get(published.size() - 1);
         await(Duration.ofSeconds(15), () -> committedOffset(last.partition()) >= last.offset() + 1);
         assertTrue(committedOffset(last.partition()) >= last.offset() + 1);
+
+        verifyAtomicProjectionConvergence(summaries);
+        verifyMalformedHistoricalRowFailsClosed(inbox);
+    }
+
+    private void assertBaselineProjection(Document projected) {
+        assertEquals(4L, projected.getLong("admittedBatchCount"));
+        var baseline = projected.get("summary", Document.class);
+        assertEquals("baseline-v1", baseline.getString("profile"));
+        assertEquals(6L, baseline.getLong("highSequence"));
+        assertEquals(1L, baseline.getLong("lateArrivalCount"));
+        assertTrue(baseline.getList("missingSequenceRanges", Document.class).isEmpty());
+        assertEquals(4L, baseline.get("sampleCounts", Document.class).getLong("gaze"));
+        assertEquals(4L, baseline.get("sampleCounts", Document.class).getLong("gameplay"));
+        assertFalse(projected.toJson().contains("patientId"));
+        assertFalse(projected.toJson().contains("doctor"));
+    }
+
+    private void verifyAtomicProjectionConvergence(
+            io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> summaries) {
+        var identity = new TelemetryStreamIdentity(UUID.randomUUID(), UUID.randomUUID());
+        var older = projection(identity, 1);
+        var newer = projection(identity, 2);
+
+        var concurrent = Uni.combine().all().unis(
+                        summaryAdapter.storeIfNewer(older), summaryAdapter.storeIfNewer(newer))
+                .asTuple().await().atMost(Duration.ofSeconds(5));
+
+        assertTrue(concurrent.getItem1() == StreamSummaryProjectionPort.WriteResult.INSERTED
+                || concurrent.getItem2() == StreamSummaryProjectionPort.WriteResult.INSERTED);
+        assertEquals(2L, summary(summaries, identity).getLong("admittedBatchCount"));
+        assertEquals(StreamSummaryProjectionPort.WriteResult.NOT_ADVANCED,
+                summaryAdapter.storeIfNewer(older).await().atMost(Duration.ofSeconds(5)));
+        assertEquals(StreamSummaryProjectionPort.WriteResult.NOT_ADVANCED,
+                summaryAdapter.storeIfNewer(newer).await().atMost(Duration.ofSeconds(5)));
+        var persisted = summary(summaries, identity);
+        assertEquals(2L, persisted.getLong("admittedBatchCount"));
+        assertEquals(2L, persisted.get("summary", Document.class)
+                .get("sampleCounts", Document.class).getLong("gaze"));
+    }
+
+    private void verifyMalformedHistoricalRowFailsClosed(
+            io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> inbox) {
+        var source = inbox.find().collect().first().await().atMost(Duration.ofSeconds(5));
+        var malformedIdentity = new TelemetryStreamIdentity(UUID.randomUUID(), UUID.randomUUID());
+        var malformedBatch = UUID.randomUUID();
+        var malformed = new Document(source)
+                .append("_id", malformedBatch.toString())
+                .append("batchId", malformedBatch.toString())
+                .append("attemptEventId", UUID.randomUUID().toString())
+                .append("therapySessionId", malformedIdentity.therapySessionId().toString())
+                .append("streamId", malformedIdentity.streamId().toString())
+                .append("sequence", 0L);
+        malformed.remove("correlationId");
+        inbox.insertOne(malformed).await().atMost(Duration.ofSeconds(5));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> inboxAdapter.loadCompleteStream(malformedIdentity).await().atMost(Duration.ofSeconds(5)));
+
+        inbox.deleteOne(eq("_id", malformedBatch.toString())).await().atMost(Duration.ofSeconds(5));
+    }
+
+    private StreamSummaryProjection projection(TelemetryStreamIdentity identity, int batchCount) {
+        var batches = new ArrayList<AdmittedTelemetryBatch>();
+        for (int sequence = 0; sequence < batchCount; sequence++) {
+            var capturedAt = Instant.parse("2026-09-18T10:00:00Z").plusSeconds(sequence);
+            var accepted = new AcceptedTelemetryBatch(
+                    1, UUID.randomUUID(), UUID.randomUUID(), identity.therapySessionId(), identity.streamId(),
+                    sequence, capturedAt, capturedAt.plusMillis(10), capturedAt.plusMillis(20),
+                    UUID.randomUUID(), sequence == 0 ? "synthetic-trace" : null,
+                    List.of(new AcceptedTelemetryBatch.GazeSample(0, .2 + sequence * .1, .3, .9)),
+                    List.of(), "sha256-" + UUID.randomUUID());
+            batches.add(new AdmittedTelemetryBatch(accepted,
+                    sequence == 0 ? TelemetryAdmissionQuality.INITIAL : TelemetryAdmissionQuality.IN_ORDER));
+        }
+        var summary = new BaselineTelemetryMetricsCalculator().calculate(batches);
+        return new StreamSummaryProjection(AnalyticsProjectionIdentity.from(summary), batchCount, summary);
     }
 
     private ObjectNode variant(ObjectNode fixture, long sequence) {
@@ -138,6 +273,24 @@ class AnalyticsKafkaMongoIT {
 
     private long count(io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> inbox) {
         return inbox.countDocuments().await().atMost(Duration.ofSeconds(2));
+    }
+
+    private Document summary(io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> summaries,
+            TelemetryStreamIdentity identity) {
+        return summaries.find(summaryIdentity(identity)).collect().first()
+                .await().atMost(Duration.ofSeconds(5));
+    }
+
+    private Bson summaryIdentity(TelemetryStreamIdentity identity) {
+        return new Document("therapySessionId", identity.therapySessionId().toString())
+                .append("streamId", identity.streamId().toString())
+                .append("calculationVersion", "baseline-v1");
+    }
+
+    private long admittedBatchCount(io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> summaries,
+            TelemetryStreamIdentity identity) {
+        var document = summary(summaries, identity);
+        return document == null ? -1 : document.getLong("admittedBatchCount");
     }
 
     private Map<Long, String> admissionQualities(

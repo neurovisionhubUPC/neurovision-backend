@@ -1,7 +1,7 @@
 package com.neurovision.rehab.analytics.interfaces.events.listeners;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitTelemetryBatchEventHandler;
+import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitAndProjectTelemetryBatchEventHandler;
 import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitTelemetryBatchEventHandler.Status;
 import com.neurovision.rehab.analytics.application.ports.out.messaging.AnalyticsDeadLetterPort;
 import com.neurovision.rehab.analytics.application.ports.out.messaging.AnalyticsDeadLetterPort.FailedRecord;
@@ -24,7 +24,7 @@ import io.smallrye.reactive.messaging.kafka.api.IncomingKafkaRecordMetadata;
 
 @ApplicationScoped
 public class TelemetryBatchAcceptedListener {
-    private final AdmitTelemetryBatchEventHandler handler;
+    private final AdmitAndProjectTelemetryBatchEventHandler handler;
     private final AnalyticsDeadLetterPort deadLetter;
     private final ObjectMapper mapper;
     private final int maxEventBytes;
@@ -35,7 +35,7 @@ public class TelemetryBatchAcceptedListener {
     private final Duration persistenceTimeout;
 
     @Inject
-    public TelemetryBatchAcceptedListener(AdmitTelemetryBatchEventHandler handler,
+    public TelemetryBatchAcceptedListener(AdmitAndProjectTelemetryBatchEventHandler handler,
             AnalyticsDeadLetterPort deadLetter, ObjectMapper mapper,
             @ConfigProperty(name = "analytics.consumer.max-event-bytes") int maxEventBytes,
             @ConfigProperty(name = "analytics.consumer.max-samples") int maxSamples,
@@ -81,7 +81,7 @@ public class TelemetryBatchAcceptedListener {
                     maxEventBytes, maxSamples, futureSkew, Instant.now());
             var provenance = new Provenance(topic, partition, offset,
                     payload.getBytes(StandardCharsets.UTF_8).length);
-            return Uni.createFrom().deferred(() -> handler.admit(batch, provenance))
+            return Uni.createFrom().deferred(() -> handler.handle(batch, provenance))
                     .ifNoItem().after(persistenceTimeout).fail()
                     .onFailure().retry().withBackOff(retryDelay, retryDelay.multipliedBy(4)).atMost(maxRetries)
                     .subscribeAsCompletionStage()
