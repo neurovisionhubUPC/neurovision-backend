@@ -17,6 +17,7 @@
         <module>profile-service</module>
         <module>clinical-service</module>
         <module>telemetry-service</module>
+        <module>analytics-service</module>
     </modules>
 
     <properties>
