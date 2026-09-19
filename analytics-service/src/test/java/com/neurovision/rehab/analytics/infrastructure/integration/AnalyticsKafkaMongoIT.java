@@ -9,14 +9,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.neurovision.rehab.analytics.application.internal.queryservices.QueryHeatmapProjectionService;
+import com.neurovision.rehab.analytics.application.ports.out.authorization.HistoricalHeatmapReadAuthorizationPort;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.StreamSummaryProjectionPort;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AdmittedTelemetryBatch;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AnalyticsProjectionIdentity;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.HeatmapProjection;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.StreamSummaryProjection;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryStreamIdentity;
 import com.neurovision.rehab.analytics.domain.services.BaselineTelemetryMetricsCalculator;
+import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoHeatmapProjectionQueryAdapter;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoStreamSummaryProjectionAdapter;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoTelemetryInboxAdapter;
 import io.quarkus.mongodb.reactive.ReactiveMongoClient;
@@ -64,6 +68,7 @@ class AnalyticsKafkaMongoIT {
     @Inject @ConfigProperty(name = "analytics.summary.collection") String summaryCollectionName;
     @Inject MongoTelemetryInboxAdapter inboxAdapter;
     @Inject MongoStreamSummaryProjectionAdapter summaryAdapter;
+    @Inject MongoHeatmapProjectionQueryAdapter heatmapQueryAdapter;
 
     @Test
     void admitsProjectsRecoversAndConvergesBeforeCommittingOffsets() throws Exception {
@@ -89,7 +94,22 @@ class AnalyticsKafkaMongoIT {
 
             var gap = variant(fixture, 6);
             published.add(send(producer, key, gap));
+            producer.flush();
+        }
 
+        await(Duration.ofSeconds(20), () -> count(inbox) == 3);
+        await(Duration.ofSeconds(20), () -> admittedBatchCount(summaries, identity) == 3);
+
+        var authorizedQuery = new QueryHeatmapProjectionService(
+                (sessionId, accessToken) -> HistoricalHeatmapReadAuthorizationPort.Decision.PERMITTED,
+                heatmapQueryAdapter);
+        var initial = authorizedQuery.query(identity.therapySessionId(), identity.streamId(), "synthetic-token")
+                .await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryHeatmapProjectionService.Status.OK, initial.status());
+        assertHeatmapProjection(initial.projection(), identity, 3, 3, 0, List.of(
+                new HeatmapProjection.SequenceRange(5, 5)));
+
+        try (var producer = producer()) {
             var late = variant(fixture, 5);
             published.add(send(producer, key, late));
             producer.flush();
@@ -97,6 +117,13 @@ class AnalyticsKafkaMongoIT {
 
         await(Duration.ofSeconds(20), () -> count(inbox) == 4);
         await(Duration.ofSeconds(20), () -> admittedBatchCount(summaries, identity) == 4);
+        var advanced = authorizedQuery.query(identity.therapySessionId(), identity.streamId(), "synthetic-token")
+                .await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryHeatmapProjectionService.Status.OK, advanced.status());
+        assertHeatmapProjection(advanced.projection(), identity, 4, 4, 1, List.of());
+        assertTrue(advanced.projection().revision() > initial.projection().revision());
+        assertFalse(advanced.projection().cellCounts().equals(initial.projection().cellCounts()));
+
         assertEquals(Map.of(3L, "INITIAL", 4L, "IN_ORDER", 5L, "LATE_ARRIVAL", 6L, "GAP_DETECTED"),
                 admissionQualities(inbox));
 
@@ -247,6 +274,37 @@ class AnalyticsKafkaMongoIT {
         assertEquals(4L, baseline.get("sampleCounts", Document.class).getLong("gameplay"));
         assertFalse(projected.toJson().contains("patientId"));
         assertFalse(projected.toJson().contains("doctor"));
+    }
+
+    private void assertHeatmapProjection(
+            HeatmapProjection projection,
+            TelemetryStreamIdentity identity, long revision, long gazeSampleCount,
+            long lateArrivalCount,
+            List<HeatmapProjection.SequenceRange> missingRanges) {
+        assertEquals(identity.therapySessionId(), projection.identity().therapySessionId());
+        assertEquals(identity.streamId(), projection.identity().streamId());
+        assertEquals("baseline-v1", projection.identity().calculationVersion());
+        assertEquals(revision, projection.revision());
+        assertEquals(1, projection.sourceSchemaVersion());
+        assertEquals(HeatmapProjection.CoordinateSpace.NORMALIZED_ZERO_TO_ONE, projection.coordinateSpace());
+        assertEquals(HeatmapProjection.CellWeight.RAW_GAZE_SAMPLE_COUNT, projection.cellWeight());
+        assertFalse(projection.confidenceFiltered());
+        assertEquals(10, projection.rows());
+        assertEquals(10, projection.columns());
+        assertEquals(100, projection.cellCounts().size());
+        var expectedCells = new ArrayList<Long>(java.util.Collections.nCopies(100, 0L));
+        expectedCells.set(82, gazeSampleCount);
+        assertEquals(expectedCells, projection.cellCounts());
+        assertEquals(3, projection.minimumSequence());
+        assertEquals(6, projection.maximumSequence());
+        assertEquals(6, projection.highSequence());
+        assertEquals(missingRanges, projection.missingSequenceRanges());
+        assertEquals(lateArrivalCount, projection.lateArrivalCount());
+        assertTrue(projection.unknownSessionBoundary());
+        assertEquals(gazeSampleCount, projection.gazeSampleCount());
+        assertEquals(Instant.parse("2026-09-17T10:00:00Z"), projection.observedTimeRange().orElseThrow().minimum());
+        assertEquals(Instant.parse("2026-09-17T10:00:00.001Z"),
+                projection.observedTimeRange().orElseThrow().maximum());
     }
 
     private void verifyAtomicProjectionConvergence(
