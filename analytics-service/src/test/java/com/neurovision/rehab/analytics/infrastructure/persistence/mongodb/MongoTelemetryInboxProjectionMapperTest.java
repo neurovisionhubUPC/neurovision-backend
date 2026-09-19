@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.AdmittedTelemetryStream;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryStreamIdentity;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -31,7 +33,7 @@ class MongoTelemetryInboxProjectionMapperTest {
     }
 
     @Test
-    void keepsTraceIdOptionalButFailsClosedWithoutRequiredCorrelationMetadata() {
+    void keepsTraceIdOptionalButFailsClosedWhenCurrentRowsLackCorrelationMetadata() {
         var withoutTrace = MongoTelemetryInboxAdapter.admittedDocument(
                 batch(null), TelemetryAdmissionQuality.INITIAL,
                 new TelemetryInboxPort.Provenance("topic", 0, 0, 100), Instant.parse("2026-09-18T10:00:03Z"));
@@ -40,6 +42,30 @@ class MongoTelemetryInboxProjectionMapperTest {
         withoutTrace.remove("correlationId");
         assertThrows(IllegalArgumentException.class,
                 () -> MongoTelemetryInboxAdapter.reconstruct(withoutTrace));
+    }
+
+    @Test
+    void reconstructsALegacyRowTogetherWithANewAdmission() {
+        var therapySessionId = UUID.randomUUID();
+        var streamId = UUID.randomUUID();
+        var legacy = MongoTelemetryInboxAdapter.admittedDocument(
+                batch(null, therapySessionId, streamId, 1), TelemetryAdmissionQuality.INITIAL,
+                new TelemetryInboxPort.Provenance("topic", 0, 0, 100), Instant.parse("2026-09-18T10:00:03Z"));
+        legacy.remove("inboxSchemaVersion");
+        legacy.remove("correlationId");
+        var current = MongoTelemetryInboxAdapter.admittedDocument(
+                batch("trace", therapySessionId, streamId, 2), TelemetryAdmissionQuality.IN_ORDER,
+                new TelemetryInboxPort.Provenance("topic", 0, 1, 100), Instant.parse("2026-09-18T10:00:04Z"));
+        var reconstructedLegacy = MongoTelemetryInboxAdapter.reconstruct(legacy);
+
+        var stream = new AdmittedTelemetryStream(new TelemetryStreamIdentity(therapySessionId, streamId), 2,
+                List.of(reconstructedLegacy, MongoTelemetryInboxAdapter.reconstruct(current)));
+
+        assertEquals(2, stream.admittedBatchCount());
+        assertEquals(reconstructedLegacy.batch().correlationId(),
+                MongoTelemetryInboxAdapter.reconstruct(legacy).batch().correlationId());
+        assertEquals(1, stream.batches().get(0).batch().sequence());
+        assertEquals(2, stream.batches().get(1).batch().sequence());
     }
 
     @Test
@@ -81,9 +107,13 @@ class MongoTelemetryInboxProjectionMapperTest {
     }
 
     private AcceptedTelemetryBatch batch(String traceId) {
+        return batch(traceId, UUID.randomUUID(), UUID.randomUUID(), 7);
+    }
+
+    private AcceptedTelemetryBatch batch(String traceId, UUID therapySessionId, UUID streamId, long sequence) {
         var capturedAt = Instant.parse("2026-09-18T10:00:00Z");
         return new AcceptedTelemetryBatch(
-                1, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 7,
+                1, UUID.randomUUID(), UUID.randomUUID(), therapySessionId, streamId, sequence,
                 capturedAt, capturedAt.plusSeconds(1), capturedAt.plusSeconds(2), UUID.randomUUID(), traceId,
                 List.of(new AcceptedTelemetryBatch.GazeSample(0, .2, .3, .9)),
                 List.of(new AcceptedTelemetryBatch.GameplaySample(5, .1, .2, .3, .4, 5, 1.5, .6)),

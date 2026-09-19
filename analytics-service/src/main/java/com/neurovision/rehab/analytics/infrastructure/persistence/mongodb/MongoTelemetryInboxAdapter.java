@@ -23,6 +23,7 @@ import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -33,6 +34,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
 public class MongoTelemetryInboxAdapter implements TelemetryInboxPort, AdmittedTelemetryStreamSourcePort {
+    private static final int CURRENT_INBOX_SCHEMA_VERSION = 2;
     private final Instance<ReactiveMongoClient> clients;
     private final String database;
     private final String collectionName;
@@ -101,6 +103,7 @@ public class MongoTelemetryInboxAdapter implements TelemetryInboxPort, AdmittedT
                 .append("admittedAt", admittedAt.toString())
                 .append("attemptEventId", batch.eventId().toString())
                 .append("serverReceivedAt", batch.serverReceivedAt().toString())
+                .append("inboxSchemaVersion", CURRENT_INBOX_SCHEMA_VERSION)
                 .append("correlationId", batch.correlationId().toString())
                 .append("source", new Document("topic", provenance.topic())
                         .append("partition", provenance.partition())
@@ -159,17 +162,18 @@ public class MongoTelemetryInboxAdapter implements TelemetryInboxPort, AdmittedT
                             requiredDouble(sample, "targetY"), requiredLong(sample, "score"),
                             requiredDouble(sample, "speed"), requiredDouble(sample, "progress")))
                     .toList();
+            var batchId = UUID.fromString(requiredString(document, "batchId"));
             var batch = new AcceptedTelemetryBatch(
                     requiredInt(document, "schemaVersion"),
                     UUID.fromString(requiredString(document, "attemptEventId")),
-                    UUID.fromString(requiredString(document, "batchId")),
+                    batchId,
                     UUID.fromString(requiredString(document, "therapySessionId")),
                     UUID.fromString(requiredString(document, "streamId")),
                     requiredLong(document, "sequence"),
                     Instant.parse(requiredString(document, "capturedAt")),
                     Instant.parse(requiredString(document, "sentAt")),
                     Instant.parse(requiredString(document, "serverReceivedAt")),
-                    UUID.fromString(requiredString(document, "correlationId")),
+                    correlationId(document, batchId),
                     optionalString(document, "traceId"),
                     gaze,
                     gameplay,
@@ -179,6 +183,19 @@ public class MongoTelemetryInboxAdapter implements TelemetryInboxPort, AdmittedT
         } catch (RuntimeException invalid) {
             throw new IllegalArgumentException("Invalid admitted inbox document", invalid);
         }
+    }
+
+    private static UUID correlationId(Document document, UUID batchId) {
+        if (!document.containsKey("inboxSchemaVersion")) {
+            Object persisted = document.get("correlationId");
+            return persisted == null
+                    ? UUID.nameUUIDFromBytes(("legacy-inbox:" + batchId).getBytes(StandardCharsets.UTF_8))
+                    : UUID.fromString(requiredString(document, "correlationId"));
+        }
+        if (requiredInt(document, "inboxSchemaVersion") != CURRENT_INBOX_SCHEMA_VERSION) {
+            throw new IllegalArgumentException("Unsupported inbox schema version");
+        }
+        return UUID.fromString(requiredString(document, "correlationId"));
     }
 
     private static List<Document> requiredDocuments(Document document, String field) {
