@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitTelemetryBatchEventHandler.Status;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort;
-import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort.AdmissionQuality;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import io.smallrye.mutiny.Uni;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -24,10 +24,10 @@ class AdmitTelemetryBatchEventHandlerTest {
     void classifiesInitialInOrderGapAndLateWithoutDiscardingValidBatches() {
         var store = new MemoryInbox();
         var handler = new AdmitTelemetryBatchEventHandler(store);
-        assertEquals(AdmissionQuality.INITIAL, admit(handler, batch(UUID.randomUUID(), 3, "a")).quality());
-        assertEquals(AdmissionQuality.IN_ORDER, admit(handler, batch(UUID.randomUUID(), 4, "b")).quality());
-        assertEquals(AdmissionQuality.GAP_DETECTED, admit(handler, batch(UUID.randomUUID(), 7, "c")).quality());
-        assertEquals(AdmissionQuality.LATE_ARRIVAL, admit(handler, batch(UUID.randomUUID(), 5, "d")).quality());
+        assertEquals(TelemetryAdmissionQuality.INITIAL, admit(handler, batch(UUID.randomUUID(), 3, "a")).quality());
+        assertEquals(TelemetryAdmissionQuality.IN_ORDER, admit(handler, batch(UUID.randomUUID(), 4, "b")).quality());
+        assertEquals(TelemetryAdmissionQuality.GAP_DETECTED, admit(handler, batch(UUID.randomUUID(), 7, "c")).quality());
+        assertEquals(TelemetryAdmissionQuality.LATE_ARRIVAL, admit(handler, batch(UUID.randomUUID(), 5, "d")).quality());
         assertEquals(4, store.rows.size());
     }
 
@@ -68,9 +68,9 @@ class AdmitTelemetryBatchEventHandlerTest {
     void treatsAnySequenceBelowMaximumLongAsLateWithoutOverflow() {
         var store = new MemoryInbox();
         var handler = new AdmitTelemetryBatchEventHandler(store);
-        assertEquals(AdmissionQuality.INITIAL,
+        assertEquals(TelemetryAdmissionQuality.INITIAL,
                 admit(handler, batch(UUID.randomUUID(), Long.MAX_VALUE, "maximum")).quality());
-        assertEquals(AdmissionQuality.LATE_ARRIVAL,
+        assertEquals(TelemetryAdmissionQuality.LATE_ARRIVAL,
                 admit(handler, batch(UUID.randomUUID(), 0, "late")).quality());
     }
 
@@ -105,7 +105,7 @@ class AdmitTelemetryBatchEventHandlerTest {
                             && row.streamId().equals(stream)).map(AcceptedTelemetryBatch::sequence)
                     .max(Long::compare));
         }
-        @Override public Uni<Void> insert(AcceptedTelemetryBatch batch, AdmissionQuality quality,
+        @Override public Uni<Void> insert(AcceptedTelemetryBatch batch, TelemetryAdmissionQuality quality,
                 Provenance source, Instant admittedAt) {
             if (raceWith != null) {
                 rows.add(raceWith); raceWith = null;

@@ -12,6 +12,7 @@ import com.mongodb.client.model.IndexOptions;
 import io.quarkus.mongodb.FindOptions;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import io.quarkus.mongodb.reactive.ReactiveMongoClient;
 import io.quarkus.mongodb.reactive.ReactiveMongoCollection;
 import io.smallrye.mutiny.Uni;
@@ -78,7 +79,7 @@ public class MongoTelemetryInboxAdapter implements TelemetryInboxPort {
     }
 
     @Override
-    public Uni<Void> insert(AcceptedTelemetryBatch batch, AdmissionQuality quality,
+    public Uni<Void> insert(AcceptedTelemetryBatch batch, TelemetryAdmissionQuality quality,
             Provenance provenance, Instant admittedAt) {
         var document = logicalDocument(batch)
                 .append("_id", batch.batchId().toString())

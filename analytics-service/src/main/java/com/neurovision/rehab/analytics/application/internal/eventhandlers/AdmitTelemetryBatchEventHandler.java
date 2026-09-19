@@ -1,9 +1,9 @@
 package com.neurovision.rehab.analytics.application.internal.eventhandlers;
 
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort;
-import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort.AdmissionQuality;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort.ConcurrentInsertException;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -51,13 +51,13 @@ public class AdmitTelemetryBatchEventHandler {
                 .orElseGet(() -> Uni.createFrom().failure(new IllegalStateException("Inbox race unresolved"))));
     }
 
-    private AdmissionQuality quality(long sequence, Optional<Long> maximum) {
-        if (maximum.isEmpty()) return AdmissionQuality.INITIAL;
+    private TelemetryAdmissionQuality quality(long sequence, Optional<Long> maximum) {
+        if (maximum.isEmpty()) return TelemetryAdmissionQuality.INITIAL;
         long max = maximum.get();
-        if (max != Long.MAX_VALUE && sequence == max + 1) return AdmissionQuality.IN_ORDER;
-        return sequence > max ? AdmissionQuality.GAP_DETECTED : AdmissionQuality.LATE_ARRIVAL;
+        if (max != Long.MAX_VALUE && sequence == max + 1) return TelemetryAdmissionQuality.IN_ORDER;
+        return sequence > max ? TelemetryAdmissionQuality.GAP_DETECTED : TelemetryAdmissionQuality.LATE_ARRIVAL;
     }
 
-    public record Result(Status status, AdmissionQuality quality) {}
+    public record Result(Status status, TelemetryAdmissionQuality quality) {}
     public enum Status { ADMITTED, DUPLICATE, BATCH_CONFLICT, SEQUENCE_CONFLICT }
 }

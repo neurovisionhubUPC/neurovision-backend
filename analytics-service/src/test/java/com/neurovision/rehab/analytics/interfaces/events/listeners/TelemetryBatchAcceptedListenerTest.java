@@ -11,6 +11,7 @@ import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitT
 import com.neurovision.rehab.analytics.application.ports.out.messaging.AnalyticsDeadLetterPort;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import com.neurovision.rehab.analytics.interfaces.events.contracts.TelemetryBatchAcceptedV1;
 import io.smallrye.mutiny.Uni;
 import java.time.Instant;
@@ -137,7 +138,7 @@ class TelemetryBatchAcceptedListenerTest {
                             && row.streamId().equals(stream)).map(AcceptedTelemetryBatch::sequence)
                     .max(Long::compare));
         }
-        @Override public Uni<Void> insert(AcceptedTelemetryBatch batch, AdmissionQuality quality,
+        @Override public Uni<Void> insert(AcceptedTelemetryBatch batch, TelemetryAdmissionQuality quality,
                 Provenance source, Instant admittedAt) {
             rows.add(batch); return Uni.createFrom().voidItem();
         }
