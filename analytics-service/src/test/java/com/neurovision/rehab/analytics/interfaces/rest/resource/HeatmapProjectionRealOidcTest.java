@@ -60,8 +60,33 @@ class HeatmapProjectionRealOidcTest {
         assertEquals("Bearer " + accessToken, observed);
     }
 
+    @Test
+    void gazePlotUsesTheSameRealOidcRolesAndGenericClinicalDenial() {
+        given().get(gazeUrl(SESSION)).then().statusCode(401);
+        given().auth().oauth2(token(List.of("ADMIN"))).get(gazeUrl(SESSION)).then().statusCode(403);
+        given().auth().oauth2(token(List.of("PATIENT")))
+                .get(gazeUrl("92000000-0000-0000-0000-000000000001"))
+                .then().statusCode(403).body("code", equalTo("GAZE_PLOT_READ_FORBIDDEN"));
+    }
+
+    @Test
+    void gazePlotForwardsTheOriginalBearerToClinicalBeforeMongo() throws Exception {
+        var accessToken = token(List.of("DOCTOR"));
+        given().auth().oauth2(accessToken).get(gazeUrl(SESSION) + "?pageSize=10")
+                .then().statusCode(503).body("code", equalTo("GAZE_PLOT_READ_UNAVAILABLE"));
+
+        String observed = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                clinicalBaseUri.resolve("/test-observed-credential")).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).body();
+        assertEquals("Bearer " + accessToken, observed);
+    }
+
     private static String url(String session) {
         return "/api/v1/analytics/sessions/" + session + "/streams/" + STREAM + "/heatmap";
+    }
+
+    private static String gazeUrl(String session) {
+        return "/api/v1/analytics/sessions/" + session + "/streams/" + STREAM + "/gaze-plot";
     }
 
     private static String token(List<String> groups) {

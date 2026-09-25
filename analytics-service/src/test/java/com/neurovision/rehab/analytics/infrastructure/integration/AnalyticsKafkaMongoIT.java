@@ -10,19 +10,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.neurovision.rehab.analytics.application.internal.queryservices.QueryHeatmapProjectionService;
+import com.neurovision.rehab.analytics.application.internal.queryservices.QueryGazePlotPageService;
 import com.neurovision.rehab.analytics.application.ports.out.authorization.HistoricalHeatmapReadAuthorizationPort;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.StreamSummaryProjectionPort;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AdmittedTelemetryBatch;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AnalyticsProjectionIdentity;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.HeatmapProjection;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.GazePlotPoint;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.StreamSummaryProjection;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryStreamIdentity;
 import com.neurovision.rehab.analytics.domain.services.BaselineTelemetryMetricsCalculator;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoHeatmapProjectionQueryAdapter;
+import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoGazePlotPageQueryAdapter;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoStreamSummaryProjectionAdapter;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoTelemetryInboxAdapter;
+import com.neurovision.rehab.analytics.interfaces.rest.transform.GazePlotPageRestAssembler;
 import io.quarkus.mongodb.reactive.ReactiveMongoClient;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -69,6 +73,7 @@ class AnalyticsKafkaMongoIT {
     @Inject MongoTelemetryInboxAdapter inboxAdapter;
     @Inject MongoStreamSummaryProjectionAdapter summaryAdapter;
     @Inject MongoHeatmapProjectionQueryAdapter heatmapQueryAdapter;
+    @Inject MongoGazePlotPageQueryAdapter gazePlotPageQueryAdapter;
 
     @Test
     void admitsProjectsRecoversAndConvergesBeforeCommittingOffsets() throws Exception {
@@ -84,15 +89,16 @@ class AnalyticsKafkaMongoIT {
                 UUID.fromString(fixture.get("therapySessionId").asText()),
                 UUID.fromString(fixture.get("streamId").asText()));
         var published = new ArrayList<Published>();
+        var first = gazeBatch(fixture, 3, "2026-09-17T10:00:00Z", .9, .8);
 
         try (var producer = producer()) {
-            published.add(send(producer, key, fixture));
+            published.add(send(producer, key, first));
 
-            var inOrder = variant(fixture, 4);
+            var inOrder = gazeBatch(fixture, 4, "2026-09-17T10:00:00.050Z", .7, .6);
             inOrder.remove("traceId");
             published.add(send(producer, key, inOrder));
 
-            var gap = variant(fixture, 6);
+            var gap = gazeBatch(fixture, 6, "2026-09-17T10:00:00.040Z", .5);
             published.add(send(producer, key, gap));
             producer.flush();
         }
@@ -106,11 +112,52 @@ class AnalyticsKafkaMongoIT {
         var initial = authorizedQuery.query(identity.therapySessionId(), identity.streamId(), "synthetic-token")
                 .await().atMost(Duration.ofSeconds(5));
         assertEquals(QueryHeatmapProjectionService.Status.OK, initial.status());
-        assertHeatmapProjection(initial.projection(), identity, 3, 3, 0, List.of(
+        assertHeatmapProjection(initial.projection(), identity, 3, 5, 0, List.of(
                 new HeatmapProjection.SequenceRange(5, 5)));
 
+        var gazeCursorCodec = new com.neurovision.rehab.analytics.application.internal.queryservices.GazePlotCursorCodec(
+                "synthetic-integration-key-for-gaze-plot-cursor-signing");
+        var gazeQueries = new QueryGazePlotPageService(
+                (sessionId, accessToken) -> HistoricalHeatmapReadAuthorizationPort.Decision.PERMITTED,
+                gazePlotPageQueryAdapter, gazeCursorCodec);
+        var deniedGazeQueries = new QueryGazePlotPageService(
+                (sessionId, accessToken) -> HistoricalHeatmapReadAuthorizationPort.Decision.DENIED,
+                gazePlotPageQueryAdapter, gazeCursorCodec);
+        var denied = deniedGazeQueries.query(identity.therapySessionId(), identity.streamId(), 2, null,
+                "synthetic-denied-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryGazePlotPageService.Status.FORBIDDEN, denied.status());
+
+        var beforeLateArrival = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2, null,
+                "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryGazePlotPageService.Status.OK, beforeLateArrival.status());
+        var beforeLateResponse = GazePlotPageRestAssembler.toResponse(
+                beforeLateArrival.page(), beforeLateArrival.nextCursorToken());
+        assertEquals(1, beforeLateResponse.contractVersion());
+        assertEquals("OBSERVED_GAZE_SAMPLES", beforeLateResponse.pointSemantics());
+        assertEquals(5, beforeLateResponse.completeness().observedGazePointCount());
+        assertEquals(List.of(3L, 3L), beforeLateResponse.points().stream()
+                .map(GazePlotPageRestAssembler.ObservedPoint::sequence).toList());
+        assertEquals(List.of(0, 1), beforeLateResponse.points().stream()
+                .map(GazePlotPageRestAssembler.ObservedPoint::gazeSampleIndex).toList());
+        assertEquals(List.of(.9, .8), beforeLateResponse.points().stream()
+                .map(GazePlotPageRestAssembler.ObservedPoint::confidence).toList());
+        assertTrue(beforeLateResponse.nextCursor() != null);
+
+        var beforeLatePageTwo = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2,
+                beforeLateResponse.nextCursor(), "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryGazePlotPageService.Status.OK, beforeLatePageTwo.status());
+        assertEquals(List.of(4L, 4L), beforeLatePageTwo.page().points().stream()
+                .map(GazePlotPoint::sequence).toList());
+        assertFalse(beforeLatePageTwo.page().points().getFirst().segmentBreakBefore());
+        var beforeLatePageThree = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2,
+                beforeLatePageTwo.nextCursorToken(),
+                "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryGazePlotPageService.Status.OK, beforeLatePageThree.status());
+        assertEquals(6L, beforeLatePageThree.page().points().getFirst().sequence());
+        assertTrue(beforeLatePageThree.page().points().getFirst().segmentBreakBefore());
+
         try (var producer = producer()) {
-            var late = variant(fixture, 5);
+            var late = gazeBatch(fixture, 5, "2026-09-17T10:00:00.030Z", .4);
             published.add(send(producer, key, late));
             producer.flush();
         }
@@ -120,9 +167,34 @@ class AnalyticsKafkaMongoIT {
         var advanced = authorizedQuery.query(identity.therapySessionId(), identity.streamId(), "synthetic-token")
                 .await().atMost(Duration.ofSeconds(5));
         assertEquals(QueryHeatmapProjectionService.Status.OK, advanced.status());
-        assertHeatmapProjection(advanced.projection(), identity, 4, 4, 1, List.of());
+        assertHeatmapProjection(advanced.projection(), identity, 4, 6, 1, List.of());
         assertTrue(advanced.projection().revision() > initial.projection().revision());
         assertFalse(advanced.projection().cellCounts().equals(initial.projection().cellCounts()));
+
+        var staleCursor = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2,
+                beforeLateResponse.nextCursor(), "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryGazePlotPageService.Status.UNAVAILABLE, staleCursor.status());
+
+        var afterLateArrival = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2, null,
+                "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryGazePlotPageService.Status.OK, afterLateArrival.status());
+        assertTrue(afterLateArrival.page().metadata().projectionRevision()
+                > beforeLateArrival.page().metadata().projectionRevision());
+        var pageTwo = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2,
+                afterLateArrival.nextCursorToken(),
+                "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        var pageThree = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2,
+                pageTwo.nextCursorToken(),
+                "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(List.of(3L, 3L), afterLateArrival.page().points().stream()
+                .map(GazePlotPoint::sequence).toList());
+        assertEquals(List.of(4L, 4L), pageTwo.page().points().stream().map(GazePlotPoint::sequence).toList());
+        assertFalse(pageTwo.page().points().getFirst().segmentBreakBefore());
+        assertEquals(List.of(5L, 6L), pageThree.page().points().stream()
+                .map(GazePlotPoint::sequence).toList());
+        assertTrue(pageThree.page().points().getFirst().segmentBreakBefore());
+        assertFalse(pageThree.page().points().getLast().segmentBreakBefore());
+        assertTrue(pageThree.page().nextCursor().isEmpty());
 
         assertEquals(Map.of(3L, "INITIAL", 4L, "IN_ORDER", 5L, "LATE_ARRIVAL", 6L, "GAP_DETECTED"),
                 admissionQualities(inbox));
@@ -154,7 +226,7 @@ class AnalyticsKafkaMongoIT {
                 .await().atMost(Duration.ofSeconds(5)));
 
         try (var producer = producer()) {
-            ObjectNode duplicateAttempt = fixture.deepCopy();
+            ObjectNode duplicateAttempt = first.deepCopy();
             duplicateAttempt.put("eventId", UUID.randomUUID().toString());
             duplicateAttempt.put("serverReceivedAt", "2026-09-17T10:00:03Z");
             published.add(send(producer, key, duplicateAttempt));
@@ -170,12 +242,12 @@ class AnalyticsKafkaMongoIT {
         verifyLegacyInboxCompatibility(inbox, summaries, fixture, published);
 
         try (var producer = producer()) {
-            ObjectNode batchConflict = fixture.deepCopy();
+            ObjectNode batchConflict = first.deepCopy();
             batchConflict.put("eventId", UUID.randomUUID().toString());
             ((ObjectNode) batchConflict.withArray("gameplaySamples").get(0)).put("score", 13);
             published.add(send(producer, key, batchConflict));
 
-            ObjectNode sequenceConflict = fixture.deepCopy();
+            ObjectNode sequenceConflict = first.deepCopy();
             sequenceConflict.put("eventId", UUID.randomUUID().toString());
             sequenceConflict.put("batchId", UUID.randomUUID().toString());
             published.add(send(producer, key, sequenceConflict));
@@ -255,7 +327,7 @@ class AnalyticsKafkaMongoIT {
         assertEquals(2, currentPersisted.getInteger("inboxSchemaVersion"));
         var projected = summary(summaries, identity);
         assertEquals(2L, projected.getLong("admittedBatchCount"));
-        assertEquals(2L, projected.get("summary", Document.class)
+        assertEquals(source.getList("gazeSamples", Document.class).size() + 1L, projected.get("summary", Document.class)
                 .get("sampleCounts", Document.class).getLong("gaze"));
         assertTrue(consumeDlq(1, Duration.ofSeconds(2)).isEmpty());
 
@@ -270,7 +342,7 @@ class AnalyticsKafkaMongoIT {
         assertEquals(6L, baseline.getLong("highSequence"));
         assertEquals(1L, baseline.getLong("lateArrivalCount"));
         assertTrue(baseline.getList("missingSequenceRanges", Document.class).isEmpty());
-        assertEquals(4L, baseline.get("sampleCounts", Document.class).getLong("gaze"));
+        assertEquals(6L, baseline.get("sampleCounts", Document.class).getLong("gaze"));
         assertEquals(4L, baseline.get("sampleCounts", Document.class).getLong("gameplay"));
         assertFalse(projected.toJson().contains("patientId"));
         assertFalse(projected.toJson().contains("doctor"));
@@ -303,7 +375,7 @@ class AnalyticsKafkaMongoIT {
         assertTrue(projection.unknownSessionBoundary());
         assertEquals(gazeSampleCount, projection.gazeSampleCount());
         assertEquals(Instant.parse("2026-09-17T10:00:00Z"), projection.observedTimeRange().orElseThrow().minimum());
-        assertEquals(Instant.parse("2026-09-17T10:00:00.001Z"),
+        assertEquals(Instant.parse("2026-09-17T10:00:00.060Z"),
                 projection.observedTimeRange().orElseThrow().maximum());
     }
 
@@ -374,6 +446,19 @@ class AnalyticsKafkaMongoIT {
         variant.put("batchId", UUID.randomUUID().toString());
         variant.put("sequence", sequence);
         return variant;
+    }
+
+    private ObjectNode gazeBatch(ObjectNode fixture, long sequence, String capturedAt, double... confidences) {
+        ObjectNode batch = variant(fixture, sequence);
+        batch.put("capturedAt", capturedAt);
+        var gazeSamples = mapper.createArrayNode();
+        for (int index = 0; index < confidences.length; index++) {
+            gazeSamples.addObject().put("offsetMs", index * 10L)
+                    .put("x", .20).put("y", .80)
+                    .put("confidence", confidences[index]);
+        }
+        batch.set("gazeSamples", gazeSamples);
+        return batch;
     }
 
     private KafkaProducer<String, String> producer() {
