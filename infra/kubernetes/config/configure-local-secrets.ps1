@@ -4,6 +4,8 @@ param(
     [string]$ExpectedContext = "k3d-neurovision-local",
     [string]$Namespace = "neurovision",
     [switch]$RotateDatabaseCredentials,
+    [switch]$RotateAnalyticsCursorSigningKey,
+    [switch]$OnlyAnalyticsCursorSigningKey,
     [switch]$SkipAws,
     [switch]$SkipTls
 )
@@ -102,6 +104,27 @@ function Ensure-TelemetryDatabaseSecret {
     Apply-SecretFromEnvFile -Name $name -SecretNamespace $SecretNamespace -Path $envFile
 }
 
+function Ensure-AnalyticsCursorSigningSecret {
+    param(
+        [string]$SecretNamespace,
+        [string]$TemporaryDirectory,
+        [bool]$Rotate
+    )
+
+    $name = "analytics-gaze-plot-cursor-signing-key"
+    $existingSecret = & kubectl get secret $name --namespace $SecretNamespace --ignore-not-found -o name
+    Assert-LastExitCode "Checking Secret $SecretNamespace/$name"
+    if ($existingSecret -and -not $Rotate) {
+        Write-Output "Secret $SecretNamespace/$name already exists; its signing key was preserved."
+        return
+    }
+
+    $envFile = Join-Path $TemporaryDirectory "$name.env"
+    "ANALYTICS_GAZE_PLOT_CURSOR_SIGNING_KEY=$(New-RandomSecret)" |
+        Set-Content -LiteralPath $envFile -Encoding Ascii
+    Apply-SecretFromEnvFile -Name $name -SecretNamespace $SecretNamespace -Path $envFile
+}
+
 $currentContext = (& kubectl config current-context).Trim()
 Assert-LastExitCode "Reading the current Kubernetes context"
 if ($currentContext -ne $ExpectedContext) {
@@ -111,14 +134,25 @@ if ($currentContext -ne $ExpectedContext) {
 & kubectl get namespace $Namespace *> $null
 Assert-LastExitCode "Checking namespace $Namespace"
 
+if ($OnlyAnalyticsCursorSigningKey -and $RotateDatabaseCredentials) {
+    throw "-RotateDatabaseCredentials cannot be combined with -OnlyAnalyticsCursorSigningKey."
+}
+
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("neurovision-secrets-" + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 
 try {
+    if ($OnlyAnalyticsCursorSigningKey) {
+        Ensure-AnalyticsCursorSigningSecret -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateAnalyticsCursorSigningKey.IsPresent
+        Write-Output "Analytics cursor signing Secret is configured without touching other Secrets or writing secret values to the repository."
+        return
+    }
+
     Ensure-DatabaseSecret -Name "iam-database-credentials" -Username "neurovision_iam" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
     Ensure-DatabaseSecret -Name "profile-database-credentials" -Username "neurovision_profile" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
     Ensure-DatabaseSecret -Name "clinical-database-credentials" -Username "neurovision_clinical" -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
     Ensure-TelemetryDatabaseSecret -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateDatabaseCredentials.IsPresent
+    Ensure-AnalyticsCursorSigningSecret -SecretNamespace $Namespace -TemporaryDirectory $temporaryRoot -Rotate $RotateAnalyticsCursorSigningKey.IsPresent
 
     if (-not $SkipAws) {
         $awsCli = Join-Path $env:LOCALAPPDATA "Programs\Amazon\AWSCLIV2\aws.exe"

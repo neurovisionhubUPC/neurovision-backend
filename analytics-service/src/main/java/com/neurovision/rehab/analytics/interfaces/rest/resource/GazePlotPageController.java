@@ -20,10 +20,18 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.Map;
 import java.util.UUID;
+import org.eclipse.microprofile.openapi.annotations.media.Content;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
+import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 @Path("/api/v1/analytics/sessions/{therapySessionId}/streams/{streamId}/gaze-plot")
 @Produces(MediaType.APPLICATION_JSON)
 @RequestScoped
+@Tag(name = "Analytics queries", description = "Authorized, versioned reads of persisted Analytics projections")
 public class GazePlotPageController {
     private final QueryGazePlotPageService queries;
     private final SecurityIdentity identity;
@@ -36,8 +44,22 @@ public class GazePlotPageController {
     @GET
     @Blocking
     @RolesAllowed({"PATIENT", "DOCTOR"})
+    @Operation(operationId = "getAnalyticsGazePlotPage", summary = "Read a bounded observed-gaze page",
+            description = "Requires a Cognito/OIDC PATIENT or DOCTOR role. Clinical authorizes the therapy session before MongoDB is queried. Cursor tokens are opaque and bound to the projection revision.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Versioned observed-gaze page and completeness metadata",
+                    content = @Content(schema = @Schema(implementation = GazePlotPageRestAssembler.GazePlotPageResponse.class))),
+            @APIResponse(responseCode = "400", description = "GAZE_PLOT_READ_INVALID_REQUEST"),
+            @APIResponse(responseCode = "401", description = "UNAUTHENTICATED"),
+            @APIResponse(responseCode = "403", description = "GAZE_PLOT_READ_FORBIDDEN"),
+            @APIResponse(responseCode = "404", description = "GAZE_PLOT_NOT_FOUND"),
+            @APIResponse(responseCode = "503", description = "GAZE_PLOT_READ_UNAVAILABLE")
+    })
     public Uni<Response> read(@PathParam("therapySessionId") String rawSessionId,
-            @PathParam("streamId") String rawStreamId, @QueryParam("pageSize") String rawPageSize,
+            @PathParam("streamId") String rawStreamId,
+            @Parameter(description = "Maximum points to return (1-500; default 100)")
+            @QueryParam("pageSize") String rawPageSize,
+            @Parameter(description = "Opaque continuation token bound to stream identity and projection revision")
             @QueryParam("cursor") String cursor) {
         final UUID sessionId;
         final UUID streamId;

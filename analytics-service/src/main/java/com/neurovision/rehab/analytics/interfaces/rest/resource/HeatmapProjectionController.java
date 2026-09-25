@@ -16,10 +16,17 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.Map;
 import java.util.UUID;
+import org.eclipse.microprofile.openapi.annotations.media.Content;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
+import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 @Path("/api/v1/analytics/sessions/{therapySessionId}/streams/{streamId}/heatmap")
 @Produces(MediaType.APPLICATION_JSON)
 @RequestScoped
+@Tag(name = "Analytics queries", description = "Authorized, versioned reads of persisted Analytics projections")
 public class HeatmapProjectionController {
     private final QueryHeatmapProjectionService queries;
     private final SecurityIdentity identity;
@@ -32,6 +39,16 @@ public class HeatmapProjectionController {
     @GET
     @Blocking
     @RolesAllowed({"PATIENT", "DOCTOR"})
+    @Operation(operationId = "getAnalyticsHeatmap", summary = "Read the baseline heatmap projection",
+            description = "Requires a Cognito/OIDC PATIENT or DOCTOR role. Clinical authorizes the therapy session before MongoDB is queried. The response reports its contract, calculation version, revision, and source completeness.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Persisted baseline heatmap projection",
+                    content = @Content(schema = @Schema(implementation = HeatmapProjectionResponse.class))),
+            @APIResponse(responseCode = "401", description = "UNAUTHENTICATED"),
+            @APIResponse(responseCode = "403", description = "HEATMAP_READ_FORBIDDEN"),
+            @APIResponse(responseCode = "404", description = "HEATMAP_NOT_FOUND"),
+            @APIResponse(responseCode = "503", description = "HEATMAP_READ_UNAVAILABLE")
+    })
     public Uni<Response> read(@PathParam("therapySessionId") String rawSessionId,
             @PathParam("streamId") String rawStreamId) {
         final UUID sessionId;

@@ -81,12 +81,46 @@ class HeatmapProjectionRealOidcTest {
         assertEquals("Bearer " + accessToken, observed);
     }
 
+    @Test
+    void allFourQueryRoutesEnforceOidcRolesAndAuthorizeThroughClinicalBeforeUnavailableMongo() {
+        var routes = List.of(
+                "/api/v1/analytics/sessions/" + SESSION + "/streams/" + STREAM + "/summary",
+                url(SESSION),
+                gazeUrl(SESSION) + "?pageSize=10",
+                replayUrl(SESSION) + "?pageSize=10");
+
+        for (String route : routes) {
+            given().get(route).then().statusCode(401);
+            given().auth().oauth2(token(List.of("ADMIN"))).get(route).then().statusCode(403);
+            for (String allowedRole : List.of("PATIENT", "DOCTOR")) {
+                given().auth().oauth2(token(List.of(allowedRole))).get(route)
+                        .then().statusCode(503);
+            }
+        }
+    }
+
+    @Test
+    void pagedRoutesRejectMalformedBoundsAndCursorShapesAtHttpBoundary() {
+        given().auth().oauth2(token(List.of("PATIENT"))).get(gazeUrl(SESSION) + "?pageSize=501")
+                .then().statusCode(400).body("code", equalTo("GAZE_PLOT_READ_INVALID_REQUEST"));
+        given().auth().oauth2(token(List.of("DOCTOR"))).get(gazeUrl(SESSION) + "?cursor=%20")
+                .then().statusCode(400).body("code", equalTo("GAZE_PLOT_READ_INVALID_REQUEST"));
+        given().auth().oauth2(token(List.of("PATIENT"))).get(replayUrl(SESSION) + "?pageSize=501")
+                .then().statusCode(400).body("code", equalTo("REPLAY_READ_INVALID_REQUEST"));
+        given().auth().oauth2(token(List.of("DOCTOR"))).get(replayUrl(SESSION) + "?gazeCursor=%20")
+                .then().statusCode(400).body("code", equalTo("REPLAY_READ_INVALID_REQUEST"));
+    }
+
     private static String url(String session) {
         return "/api/v1/analytics/sessions/" + session + "/streams/" + STREAM + "/heatmap";
     }
 
     private static String gazeUrl(String session) {
         return "/api/v1/analytics/sessions/" + session + "/streams/" + STREAM + "/gaze-plot";
+    }
+
+    private static String replayUrl(String session) {
+        return "/api/v1/analytics/sessions/" + session + "/streams/" + STREAM + "/replay";
     }
 
     private static String token(List<String> groups) {

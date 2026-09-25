@@ -11,6 +11,17 @@ material directly in the local cluster. Secret values must never be committed.
 The script refuses to write unless the active context is
 `k3d-neurovision-local`.
 
+For Analytics-only provisioning, use the isolated mode instead of the full
+setup command:
+
+```powershell
+.\infra\kubernetes\config\configure-local-secrets.ps1 -OnlyAnalyticsCursorSigningKey
+```
+
+It checks the current context and namespace, then reads or writes only the
+Analytics cursor-key Secret. Database, AWS, and TLS Secrets are not touched;
+`-RotateDatabaseCredentials` is rejected in this mode.
+
 ## Resources
 
 | Resource | Namespace | Purpose |
@@ -23,6 +34,7 @@ The script refuses to write unless the active context is
 | `profile-database-credentials` | `neurovision` | Stable generated Profile database credentials |
 | `clinical-database-credentials` | `neurovision` | Stable generated Clinical database credentials |
 | `telemetry-database-credentials` | `neurovision` | Stable generated Telemetry TimescaleDB credentials |
+| `analytics-gaze-plot-cursor-signing-key` | `neurovision` | Stable random HMAC key for Analytics gaze-plot cursors |
 | `iam-aws-credentials` | `neurovision` | Temporary credentials exported from the limited AWS role |
 | `neurovision-local-tls` | `kube-system` | Local HTTPS certificate consumed by the Traefik Gateway |
 
@@ -39,6 +51,20 @@ After IAM has a Deployment, restart it so the Pod receives the refreshed Secret:
 The `-RotateDatabaseCredentials` switch exists for controlled local recovery.
 Do not use it after PostgreSQL is initialized unless the database password is
 rotated in the same operation.
+
+The Analytics cursor key is generated once and preserved by later runs,
+including runs with `-RotateDatabaseCredentials`. To deliberately invalidate
+outstanding Analytics gaze cursors and replace only this key, use
+`-OnlyAnalyticsCursorSigningKey -RotateAnalyticsCursorSigningKey`; this does
+not rotate database credentials or any other Secret.
+The key is written only to the Kubernetes Secret through a temporary file under
+the system temp directory. It is not printed or stored in the repository.
+
+Until an Analytics Kubernetes Deployment exists, this Secret is provisioned
+without creating an Analytics workload. A future Deployment must expose its key
+as the `ANALYTICS_GAZE_PLOT_CURSOR_SIGNING_KEY` environment variable using
+`secretKeyRef` with Secret `analytics-gaze-plot-cursor-signing-key` and key
+`ANALYTICS_GAZE_PLOT_CURSOR_SIGNING_KEY`.
 
 ## Safety notes
 

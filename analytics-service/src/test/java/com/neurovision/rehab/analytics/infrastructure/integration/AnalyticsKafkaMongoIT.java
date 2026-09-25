@@ -11,19 +11,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.neurovision.rehab.analytics.application.internal.queryservices.QueryHeatmapProjectionService;
 import com.neurovision.rehab.analytics.application.internal.queryservices.QueryGazePlotPageService;
+import com.neurovision.rehab.analytics.application.internal.queryservices.QueryReplayPageService;
 import com.neurovision.rehab.analytics.application.ports.out.authorization.HistoricalHeatmapReadAuthorizationPort;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.StreamSummaryProjectionPort;
+import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AdmittedTelemetryBatch;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AnalyticsProjectionIdentity;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.HeatmapProjection;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.GazePlotPoint;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.ReplayLane;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.ReplaySample;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.StreamSummaryProjection;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryStreamIdentity;
 import com.neurovision.rehab.analytics.domain.services.BaselineTelemetryMetricsCalculator;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoHeatmapProjectionQueryAdapter;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoGazePlotPageQueryAdapter;
+import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoReplayPageQueryAdapter;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoStreamSummaryProjectionAdapter;
 import com.neurovision.rehab.analytics.infrastructure.persistence.mongodb.MongoTelemetryInboxAdapter;
 import com.neurovision.rehab.analytics.interfaces.rest.transform.GazePlotPageRestAssembler;
@@ -74,6 +79,7 @@ class AnalyticsKafkaMongoIT {
     @Inject MongoStreamSummaryProjectionAdapter summaryAdapter;
     @Inject MongoHeatmapProjectionQueryAdapter heatmapQueryAdapter;
     @Inject MongoGazePlotPageQueryAdapter gazePlotPageQueryAdapter;
+    @Inject MongoReplayPageQueryAdapter replayPageQueryAdapter;
 
     @Test
     void admitsProjectsRecoversAndConvergesBeforeCommittingOffsets() throws Exception {
@@ -95,6 +101,7 @@ class AnalyticsKafkaMongoIT {
             published.add(send(producer, key, first));
 
             var inOrder = gazeBatch(fixture, 4, "2026-09-17T10:00:00.050Z", .7, .6);
+            inOrder.set("gameplaySamples", mapper.createArrayNode());
             inOrder.remove("traceId");
             published.add(send(producer, key, inOrder));
 
@@ -127,6 +134,17 @@ class AnalyticsKafkaMongoIT {
                 "synthetic-denied-token").await().atMost(Duration.ofSeconds(5));
         assertEquals(QueryGazePlotPageService.Status.FORBIDDEN, denied.status());
 
+        var replayCodec = new com.neurovision.rehab.analytics.application.internal.queryservices.ReplayCursorCodec(
+                "synthetic-integration-key-for-replay-cursor-signing");
+        var replayQueries = new QueryReplayPageService(
+                (sessionId, accessToken) -> HistoricalHeatmapReadAuthorizationPort.Decision.PERMITTED,
+                replayPageQueryAdapter, replayCodec);
+        var deniedReplayQueries = new QueryReplayPageService(
+                (sessionId, accessToken) -> HistoricalHeatmapReadAuthorizationPort.Decision.DENIED,
+                replayPageQueryAdapter, replayCodec);
+        assertEquals(QueryReplayPageService.Status.FORBIDDEN, deniedReplayQueries.query(UUID.randomUUID(),
+                UUID.randomUUID(), 2, null, null, "synthetic-denied-token").await().atMost(Duration.ofSeconds(5)).status());
+
         var beforeLateArrival = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2, null,
                 "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
         assertEquals(QueryGazePlotPageService.Status.OK, beforeLateArrival.status());
@@ -142,6 +160,21 @@ class AnalyticsKafkaMongoIT {
         assertEquals(List.of(.9, .8), beforeLateResponse.points().stream()
                 .map(GazePlotPageRestAssembler.ObservedPoint::confidence).toList());
         assertTrue(beforeLateResponse.nextCursor() != null);
+
+        var beforeLateReplay = replayQueries.query(identity.therapySessionId(), identity.streamId(), 2,
+                null, null, "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryReplayPageService.Status.OK, beforeLateReplay.status());
+        assertEquals(ReplayLane.GAZE, beforeLateReplay.page().gaze().lane());
+        assertEquals(List.of(3L, 3L), beforeLateReplay.page().gaze().samples().stream()
+                .map(ReplaySample::sequence).toList());
+        assertEquals(ReplayLane.GAMEPLAY, beforeLateReplay.page().gameplay().lane());
+        assertEquals(List.of(3L, 6L), beforeLateReplay.page().gameplay().samples().stream()
+                .map(ReplaySample::sequence).toList());
+        assertTrue(beforeLateReplay.page().gameplay().samples().getLast().segmentBreakBefore());
+        assertEquals(List.of(new HeatmapProjection.SequenceRange(5, 5)),
+                beforeLateReplay.page().gameplay().knownMissingSequenceRanges());
+        assertTrue(beforeLateReplay.page().gaze().nextCursor().isPresent());
+        assertTrue(beforeLateReplay.page().gameplay().nextCursor().isEmpty());
 
         var beforeLatePageTwo = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2,
                 beforeLateResponse.nextCursor(), "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
@@ -174,6 +207,9 @@ class AnalyticsKafkaMongoIT {
         var staleCursor = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2,
                 beforeLateResponse.nextCursor(), "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
         assertEquals(QueryGazePlotPageService.Status.UNAVAILABLE, staleCursor.status());
+        var staleReplayCursor = replayQueries.query(identity.therapySessionId(), identity.streamId(), 2,
+                beforeLateReplay.nextGazeCursor(), null, "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryReplayPageService.Status.INVALID_REQUEST, staleReplayCursor.status());
 
         var afterLateArrival = gazeQueries.query(identity.therapySessionId(), identity.streamId(), 2, null,
                 "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
@@ -273,6 +309,7 @@ class AnalyticsKafkaMongoIT {
 
         verifyAtomicProjectionConvergence(summaries);
         verifyMalformedHistoricalRowFailsClosed(inbox);
+        verifyReplayAdmissionProjectionRace(inbox, summaries);
     }
 
     private void verifyLegacyInboxCompatibility(
@@ -343,7 +380,7 @@ class AnalyticsKafkaMongoIT {
         assertEquals(1L, baseline.getLong("lateArrivalCount"));
         assertTrue(baseline.getList("missingSequenceRanges", Document.class).isEmpty());
         assertEquals(6L, baseline.get("sampleCounts", Document.class).getLong("gaze"));
-        assertEquals(4L, baseline.get("sampleCounts", Document.class).getLong("gameplay"));
+        assertEquals(3L, baseline.get("sampleCounts", Document.class).getLong("gameplay"));
         assertFalse(projected.toJson().contains("patientId"));
         assertFalse(projected.toJson().contains("doctor"));
     }
@@ -421,6 +458,63 @@ class AnalyticsKafkaMongoIT {
                 () -> inboxAdapter.loadCompleteStream(malformedIdentity).await().atMost(Duration.ofSeconds(5)));
 
         inbox.deleteOne(eq("_id", malformedBatch.toString())).await().atMost(Duration.ofSeconds(5));
+    }
+
+    private void verifyReplayAdmissionProjectionRace(
+            io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> inbox,
+            io.quarkus.mongodb.reactive.ReactiveMongoCollection<Document> summaries) {
+        var identity = new TelemetryStreamIdentity(UUID.randomUUID(), UUID.randomUUID());
+        var first = replayBatch(identity, 1, List.of(new AcceptedTelemetryBatch.GazeSample(0, .2, .3, .9)),
+                List.of(new AcceptedTelemetryBatch.GameplaySample(0, .1, .2, .3, .4, 1, 1, .5)));
+        var third = replayBatch(identity, 3, List.of(new AcceptedTelemetryBatch.GazeSample(0, .4, .5, .8)), List.of());
+        var admitted = List.of(new AdmittedTelemetryBatch(first, TelemetryAdmissionQuality.INITIAL),
+                new AdmittedTelemetryBatch(third, TelemetryAdmissionQuality.GAP_DETECTED));
+        insertReplayBatch(first, TelemetryAdmissionQuality.INITIAL, 1);
+        insertReplayBatch(third, TelemetryAdmissionQuality.GAP_DETECTED, 3);
+        var summary = new BaselineTelemetryMetricsCalculator().calculate(admitted);
+        summaryAdapter.storeIfNewer(new StreamSummaryProjection(AnalyticsProjectionIdentity.from(summary), 2, summary))
+                .await().atMost(Duration.ofSeconds(5));
+
+        var replayCodec = new com.neurovision.rehab.analytics.application.internal.queryservices.ReplayCursorCodec(
+                "synthetic-integration-key-for-replay-cursor-signing");
+        var queries = new QueryReplayPageService(
+                (sessionId, accessToken) -> HistoricalHeatmapReadAuthorizationPort.Decision.PERMITTED,
+                replayPageQueryAdapter, replayCodec);
+        var stable = queries.query(identity.therapySessionId(), identity.streamId(), 1,
+                null, null, "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryReplayPageService.Status.OK, stable.status());
+        assertEquals(List.of(1L), stable.page().gaze().samples().stream().map(ReplaySample::sequence).toList());
+        assertEquals(List.of(new HeatmapProjection.SequenceRange(2, 2)),
+                stable.page().gaze().knownMissingSequenceRanges());
+        assertTrue(stable.nextGazeCursor() != null);
+
+        var late = replayBatch(identity, 2, List.of(new AcceptedTelemetryBatch.GazeSample(0, .3, .4, .85)), List.of());
+        insertReplayBatch(late, TelemetryAdmissionQuality.LATE_ARRIVAL, 2);
+        var inconsistent = queries.query(identity.therapySessionId(), identity.streamId(), 1,
+                null, null, "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryReplayPageService.Status.UNAVAILABLE, inconsistent.status());
+        var stale = queries.query(identity.therapySessionId(), identity.streamId(), 1,
+                stable.nextGazeCursor(), null, "synthetic-permitted-token").await().atMost(Duration.ofSeconds(5));
+        assertEquals(QueryReplayPageService.Status.INVALID_REQUEST, stale.status());
+        assertEquals(3L, inbox.countDocuments(new Document("therapySessionId", identity.therapySessionId().toString())
+                .append("streamId", identity.streamId().toString())).await().atMost(Duration.ofSeconds(5)));
+
+        inbox.deleteMany(new Document("therapySessionId", identity.therapySessionId().toString())
+                .append("streamId", identity.streamId().toString())).await().atMost(Duration.ofSeconds(5));
+        summaries.deleteOne(summaryIdentity(identity)).await().atMost(Duration.ofSeconds(5));
+    }
+
+    private void insertReplayBatch(AcceptedTelemetryBatch batch, TelemetryAdmissionQuality quality, long offset) {
+        inboxAdapter.insert(batch, quality, new TelemetryInboxPort.Provenance("synthetic-replay", 0, offset, 256),
+                Instant.now()).await().atMost(Duration.ofSeconds(5));
+    }
+
+    private AcceptedTelemetryBatch replayBatch(TelemetryStreamIdentity identity, long sequence,
+            List<AcceptedTelemetryBatch.GazeSample> gaze, List<AcceptedTelemetryBatch.GameplaySample> gameplay) {
+        var captured = Instant.parse("2026-09-20T10:00:00Z").plusSeconds(sequence);
+        return new AcceptedTelemetryBatch(1, UUID.randomUUID(), UUID.randomUUID(), identity.therapySessionId(),
+                identity.streamId(), sequence, captured, captured.plusMillis(10), captured.plusMillis(20),
+                UUID.randomUUID(), "synthetic-replay", gaze, gameplay, "a".repeat(64));
     }
 
     private StreamSummaryProjection projection(TelemetryStreamIdentity identity, int batchCount) {
