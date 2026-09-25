@@ -128,6 +128,106 @@ The generated `.env` is ignored by Git. Never copy its contents into `compose.ya
 
 `TELEMETRY_DB_PASSWORD` is generated once and reused on subsequent runs, like the other database passwords. The TimescaleDB image is pinned to `timescale/timescaledb:2.30.1-pg17`; its named volume is separate from the three PostgreSQL volumes. The Telemetry service receives development-only bounded request/Kafka limits in `compose.yaml`. They are **not** clinical limits or measured production capacity. Its JDBC connection runs Flyway V1–V3 at startup, while the reactive connection handles sample reads and writes. Kafka topic provisioning already includes the Telemetry event, its DLQ, and replay audit topic.
 
+## Analytics Phase 13B: real Clinical authorization
+
+The repository overlay `analytics-real-clinical.compose.yaml` and harness `smoke-test-analytics-real-clinical-compose.ps1` target only the isolated project `analytics-ca13b-realclinical-20260925`; the default Compose configuration is unchanged. The overlay exposes Clinical and Analytics only on loopback ports `18083` and `18085`, removes dependency host ports, uses the prebuilt Analytics **JVM** image, and attaches only the pre-existing, test-only `neurovision-rehab_clinical-postgresql-data` volume externally. Kafka and MongoDB use isolated project volumes. It requires an existing local `.env`, prebuilt `neurovision/analytics-service:compose-jvm` and Clinical images, and that Clinical volume containing sessions associated with the existing PATIENT and DOCTOR test accounts. It does not create users or seed Clinical data. Do not run it with another project name or real patient data.
+
+From the repository root, validate the model and start only this isolated stack with pre-existing images. The default harness invocation is static preflight only: it makes no Cognito request, browser login, database query, Kafka publish, or API call.
+
+```powershell
+$project = 'analytics-ca13b-realclinical-20260925'
+$overlay = 'infra/docker/analytics-real-clinical.compose.yaml'
+docker compose -p $project -f compose.yaml -f $overlay config -q
+docker compose -p $project -f compose.yaml -f $overlay up -d --no-build --pull never --wait --wait-timeout 120 analytics-service
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-analytics-real-clinical-compose.ps1
+```
+
+The overlay assumes the approved external Clinical test volume already exists; never create or replace it to make this smoke pass. Its effective Compose model was compared with the previously used ignored test overlay and matched. This is a local JVM Analytics smoke, **not** verification of an Analytics native image, production readiness, or Kubernetes behavior.
+
+Only when the operator explicitly chooses the interactive test, use `-RunPkce` with an existing test account. The script opens Cognito hosted sign-in; do not pass a password or token on the command line. It requires Clinical and Analytics ready on their loopback ports. If the authenticated subject has no matching session in the approved volume, it stops without seeding one. On a match, it checks Clinical directly, publishes one synthetic V1 event to isolated Kafka, waits at most 20 seconds for an Analytics summary and revision, then expects a generic 403 for an unrelated session. Output contains only statuses, role, and pass/fail markers—not identifiers, tokens, coordinates, or response bodies.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-analytics-real-clinical-compose.ps1 -RunPkce -Role PATIENT
+```
+
+The event fixture is `analytics-service/src/test/resources/fixtures/telemetry/v1/accepted-event-wire.json`; the script substitutes fresh event, batch, stream, and correlation IDs in memory. An unsuccessful run may have published its one event, so inspect the isolated state before deliberately running it again. Do not use `docker compose logs` or `down -v` for this test.
+
+To opt into the fail-closed check, add `-VerifyClinicalUnavailable` to an interactive `-RunPkce` invocation. Only after an authorized Analytics summary does the harness stop the isolated project's `clinical-service`, query that same summary with the same in-memory access token, and require HTTP 503. A `finally` block starts only that existing service and waits a bounded time for readiness, including when the assertion fails. It does not reset or delete volumes; allow for a brief Clinical outage in this isolated project only.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-analytics-real-clinical-compose.ps1 -RunPkce -Role PATIENT -VerifyClinicalUnavailable
+```
+
+Observed on 2026-09-25: independent PATIENT and DOCTOR PKCE smokes each returned Clinical 200, Analytics summary 200 with revision, and unrelated-session 403. A separate PATIENT PKCE outage smoke returned the same 200/403 results, then Analytics 503 while isolated Clinical was stopped; Clinical was restored and ready before teardown. Exactly three pinned synthetic V1 events were published, one per smoke. The full `analytics-service` Maven test run passed: 126 tests, zero failures, errors, or skips. After both services returned readiness 200, `docker compose stop` stopped only this isolated project; no service remains running and volumes were preserved.
+
+When finished, stop this project without deleting volumes:
+
+```powershell
+docker compose -p $project -f compose.yaml -f $overlay stop
+```
+
+## Analytics Phase 13C: native image with real Clinical
+
+The separate test-only overlay `analytics-native-real-clinical.compose.yaml` uses project
+`analytics-ca13c-native-20260925`, loopback ports `18183` and `18185`, fresh Kafka/MongoDB
+volumes, and the same approved external **test-only** Clinical volume. It does not seed
+Clinical or alter the default Compose stack. The harness pins and verifies the local native
+image ID and the running container image before interactive testing. A rebuilt image requires
+reviewing that pin; a healthy JVM container is not native proof.
+
+From the repository root, with cached Maven dependencies and builder/base images, build
+offline and start only the isolated services:
+
+```powershell
+.\mvnw.cmd -o -B -ntp -pl analytics-service -am package "-Dnative" "-DskipTests" `
+  "-Dquarkus.native.container-build=true" "-Dquarkus.native.builder-image.pull=never" `
+  "-Dquarkus.native.container-runtime-options=--network=none"
+docker build --pull=false --network=none -f analytics-service/src/main/docker/Dockerfile.native-micro `
+  -t neurovision/analytics-service:compose-native analytics-service
+$project = 'analytics-ca13c-native-20260925'
+$overlay = 'infra/docker/analytics-native-real-clinical.compose.yaml'
+docker compose -p $project -f compose.yaml -f $overlay config -q
+docker compose -p $project -f compose.yaml -f $overlay up --no-build --pull never -d `
+  clinical-postgresql analytics-mongodb kafka kafka-init clinical-service analytics-service
+.\infra\docker\smoke-test-analytics-native-real-clinical-compose.ps1 -CheckNativeRuntime
+```
+
+The default harness invocation is local preflight. `-CheckNativeRuntime` checks readiness
+and image identity without Cognito sign-in or event publishing. Only with explicit approval
+for the development Cognito test accounts may an operator run `-RunPkce -Role DOCTOR` or
+`-Role PATIENT`; the interactive login does not require sharing a password. On an eligible
+Clinical session, the harness publishes one synthetic V1 event and checks Clinical 200,
+Analytics summary 200 with revision, and an unrelated-session 403. A failed run may already
+have published its event; inspect aggregate state before retrying. Do not replay DLQ data.
+For a separately authorized outage probe, append `-VerifyClinicalUnavailable` to an
+interactive PATIENT invocation. The harness checks Analytics 503 while only the isolated
+Clinical service is stopped, then restores Clinical in `finally`.
+
+Observed on 2026-09-25 with corrected native image
+`sha256:4df5f6b03adb16b06539d8cca7dfd3a98724174257d054f4ce9f398908c44abf`:
+the **DOCTOR** synthetic smoke passed those 200/200/403 checks. An earlier PATIENT attempt
+stopped at Clinical session lookup before publishing; a later bounded PATIENT run with the
+existing Compose test fixture passed Clinical 200, Analytics summary 200 with revision, and
+unrelated-session 403 after exactly one fresh synthetic V1 event. An earlier native attempt
+quarantined one synthetic event as `INVALID_EVENT`; it was not replayed. Aggregate final state
+was accepted-topic end offset 3, DLQ end offset 1, MongoDB inbox count 2, and summary count 2.
+A separate PATIENT outage smoke then returned Clinical 200, Analytics summary 200, unrelated
+403, and Analytics 503 while Clinical was stopped. Independent readiness checks after the
+harness restored Clinical returned 200 for both services. That smoke published one new
+synthetic event: accepted-topic end offset 4, DLQ end offset still 1, MongoDB inbox and
+summary counts 3/3. The old quarantined event was **not** replayed. Analytics JVM tests
+passed 128/128. Kubernetes, production capacity, and real-patient privacy controls were
+not verified by these smokes.
+
+After verifying the project name and overlay, remove only this isolated project's
+containers and network while retaining its named volumes and the external Clinical volume:
+
+```powershell
+docker compose -p $project -f compose.yaml -f $overlay down
+```
+
+Do **not** add `-v` or remove images. Keep the Phase 13B JVM project separate.
+
 ## Synthetic Telemetry verification
 
 1. Check the Compose model without reading private `.env` values: `docker compose --env-file .env.example config --quiet`. Do not use the example file to run authenticated services; it contains placeholders.

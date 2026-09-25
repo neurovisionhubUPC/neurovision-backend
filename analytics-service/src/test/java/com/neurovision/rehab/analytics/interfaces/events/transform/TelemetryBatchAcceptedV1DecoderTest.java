@@ -8,9 +8,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.neurovision.rehab.analytics.infrastructure.configuration.AnalyticsNativeReflectionConfiguration;
+import com.neurovision.rehab.analytics.interfaces.events.contracts.TelemetryBatchAcceptedV1;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class TelemetryBatchAcceptedV1DecoderTest {
@@ -18,6 +24,36 @@ class TelemetryBatchAcceptedV1DecoderTest {
     private static final Instant NOW = Instant.parse("2026-09-17T10:00:05Z");
     private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
+    @Test
+    void registersDynamicallyDecodedKafkaRecordsForNativeReflection() {
+        var registration = AnalyticsNativeReflectionConfiguration.class.getAnnotation(RegisterForReflection.class);
+        assertEquals(Set.of(TelemetryBatchAcceptedV1.class, TelemetryBatchAcceptedV1.GazeSampleV1.class,
+                TelemetryBatchAcceptedV1.GameplaySampleV1.class),
+                java.util.Arrays.stream(registration.targets()).collect(Collectors.toSet()));
+    }
+
+    @Test
+    void acceptsCurrentSessionIdentityAndTimestampsLikeTheComposeSyntheticEvent() throws Exception {
+        var event = (ObjectNode) mapper.readTree(fixture());
+        var sessionId = UUID.randomUUID();
+        var streamId = UUID.randomUUID();
+        event.put("eventId", UUID.randomUUID().toString());
+        event.put("batchId", UUID.randomUUID().toString());
+        event.put("therapySessionId", sessionId.toString());
+        event.put("streamId", streamId.toString());
+        event.put("correlationId", UUID.randomUUID().toString());
+        event.put("capturedAt", NOW.minusSeconds(2).toString());
+        event.put("sentAt", NOW.minusSeconds(1).toString());
+        event.put("serverReceivedAt", NOW.toString());
+        event.put("sequence", 0);
+
+        var decoded = decode(sessionId + ":" + streamId, mapper.writeValueAsString(event));
+        assertEquals(sessionId, decoded.therapySessionId());
+        assertEquals(streamId, decoded.streamId());
+        assertEquals(1, decoded.gazeSamples().size());
+        assertEquals(1, decoded.gameplaySamples().size());
+    }
 
     @Test
     void acceptsFrozenFixtureAndFingerprintIgnoresAttemptMetadata() throws Exception {

@@ -1,0 +1,29 @@
+# Test-only overlay for the isolated Analytics/real-Clinical smoke.
+# Use only with the project name analytics-ca13b-realclinical-20260925.
+services:
+  clinical-postgresql:
+    restart: "no"
+  analytics-mongodb:
+    ports: !override []
+    restart: "no"
+  kafka:
+    ports: !override []
+    restart: "no"
+  clinical-service:
+    ports: !override
+      - "127.0.0.1:18083:8080"
+    restart: "no"
+  analytics-service:
+    image: neurovision/analytics-service:compose-jvm
+    ports: !override
+      - "127.0.0.1:18085:8080"
+    restart: "no"
+
+networks:
+  neurovision:
+    name: analytics-ca13b-realclinical-20260925-network
+
+volumes:
+  clinical-postgresql-data:
+    external: true
+    name: neurovision-rehab_clinical-postgresql-data
