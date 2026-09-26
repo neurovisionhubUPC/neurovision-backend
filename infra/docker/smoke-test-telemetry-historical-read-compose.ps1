@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch] $PreflightOnly,
+    [switch] $OfflineTests,
     [string] $ClinicalBaseUrl = 'http://localhost:8083',
     [string] $TelemetryBaseUrl = 'http://localhost:8084'
 )
@@ -10,6 +11,135 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $envPath = Join-Path $repositoryRoot '.env'
 $redirectUri = 'http://localhost:5173/auth/callback'
 $listenerPrefix = 'http://localhost:5173/'
+$script:historicalStage = 'mode_guard'
+
+function Get-FailureDiagnostic([string] $Stage, [string] $Message) {
+    $safeStage = if ($Stage -in @(
+        'mode_guard', 'synthetic_fixture', 'clinical_readiness', 'telemetry_readiness',
+        'unauthenticated_read', 'patient_pkce_login', 'authenticated_page_one',
+        'authenticated_page_two')) { $Stage } else { 'unknown' }
+    $guard = if ($Message -match '^Historical read returned unexpected HTTP status [0-9]+\.$') {
+        if ($safeStage -eq 'unauthenticated_read') { 'unauthenticated_status_unexpected' } else { 'authenticated_status_unexpected' }
+    } else { switch -CaseSensitive ($Message) {
+        'Only plain HTTP loopback service origins are allowed.' { 'service_origin_invalid' }
+        'The local .env file is missing.' { 'public_settings_unavailable' }
+        'A required public Cognito setting is missing or duplicated.' { 'public_settings_invalid' }
+        'A required public Cognito setting is empty.' { 'public_settings_invalid' }
+        'The synthetic fixture query failed.' { 'synthetic_query_failed' }
+        'The synthetic fixture query returned an unexpected row count.' { 'synthetic_row_count_invalid' }
+        'The synthetic fixture row has an unexpected field count.' { 'synthetic_field_count_invalid' }
+        'The synthetic fixture has an unexpected sample count.' { 'synthetic_sample_count_invalid' }
+        'The synthetic fixture has an unexpected gaze count.' { 'synthetic_gaze_count_invalid' }
+        'The synthetic fixture has an unexpected gameplay count.' { 'synthetic_gameplay_count_invalid' }
+        'The local synthetic group has invalid identifiers.' { 'synthetic_identifiers_invalid' }
+        'The local synthetic group has invalid sample times.' { 'synthetic_timestamps_invalid' }
+        'The synthetic sample interval exceeds the historical-read limit.' { 'synthetic_window_invalid' }
+        'A required local service is not ready.' { 'service_not_ready' }
+        'The access token is malformed.' { 'identity_token_invalid' }
+        'The access token claims could not be read.' { 'identity_claims_invalid' }
+        'The access token is not for the expected PATIENT.' { 'patient_identity_invalid' }
+        'Cognito OIDC discovery failed.' { 'oidc_discovery_failed' }
+        'Cognito OIDC issuer mismatch.' { 'oidc_issuer_invalid' }
+        'Cognito OIDC endpoints are invalid.' { 'oidc_endpoint_invalid' }
+        'The PKCE callback was invalid.' { 'pkce_callback_invalid' }
+        'Timed out waiting for the PKCE callback.' { 'pkce_callback_timeout' }
+        'Cognito token exchange failed.' { 'pkce_exchange_failed' }
+        'Cognito did not return an access token.' { 'pkce_exchange_invalid' }
+        'Historical read returned invalid JSON.' { 'historical_page_invalid' }
+        'Historical read returned an unexpected page.' { 'historical_page_invalid' }
+        'Historical read returned an unexpected cursor state.' { 'historical_cursor_invalid' }
+        'Historical pages did not reconstruct the synthetic gaze/gameplay pair.' { 'historical_pages_invalid' }
+        default { 'operation_failed' }
+    } }
+    return [pscustomobject]@{ Stage = $safeStage; Guard = $guard }
+}
+
+function Format-FailureDiagnostic([string] $Stage, [string] $Message) {
+    $diagnostic = Get-FailureDiagnostic $Stage $Message
+    return ('HISTORICAL_READ_FAILED: stage={0}; guard={1}' -f $diagnostic.Stage, $diagnostic.Guard)
+}
+
+function Invoke-NativeCommand([string] $Executable, [string[]] $Arguments) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 promotes native stderr to an error record; scope Continue to this call.
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Executable @Arguments 2>$null)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return [pscustomobject]@{ Output = $output; ExitCode = $exitCode }
+}
+
+function Assert-OfflineCase([bool] $Condition, [string] $Name) {
+    if (-not $Condition) { throw "Offline historical-read test failed: $Name" }
+}
+
+function Assert-OfflineSampleGuard([psobject] $Result, [string] $ExpectedGuard) {
+    $failure = $null
+    try { $null = ConvertFrom-SyntheticSampleGroupResult $Result } catch {
+        $failure = $_.Exception.Message
+    }
+    Assert-OfflineCase ($null -ne $failure) "$ExpectedGuard-thrown"
+    $diagnostic = Get-FailureDiagnostic 'synthetic_fixture' $failure
+    Assert-OfflineCase ($diagnostic.Guard -ceq $ExpectedGuard) "$ExpectedGuard-mapped"
+}
+
+function Invoke-OfflineTests {
+    $cmd = [IO.Path]::Combine([Environment]::SystemDirectory, 'cmd.exe')
+    $nativeSuccess = Invoke-NativeCommand $cmd @('/d', '/c', 'echo NATIVE-STDOUT-CANARY & echo NATIVE-STDERR-CANARY 1>&2')
+    Assert-OfflineCase ($nativeSuccess.ExitCode -eq 0) 'native-stderr-zero-exit-captured'
+    Assert-OfflineCase (($nativeSuccess.Output -join "`n") -match 'NATIVE-STDOUT-CANARY') 'native-stdout-captured'
+    Assert-OfflineCase (($nativeSuccess.Output -join "`n") -notmatch 'NATIVE-STDERR-CANARY') 'native-stderr-discarded'
+    Assert-OfflineCase ($ErrorActionPreference -ceq 'Stop') 'native-zero-exit-preference-restored'
+    $nativeFailure = Invoke-NativeCommand $cmd @('/d', '/c', 'echo NATIVE-STDERR-CANARY 1>&2 & exit /b 7')
+    Assert-OfflineCase ($nativeFailure.ExitCode -eq 7) 'native-stderr-nonzero-exit-captured'
+    Assert-OfflineCase (($nativeFailure.Output -join "`n") -notmatch 'NATIVE-STDERR-CANARY') 'native-failure-stderr-discarded'
+    Assert-OfflineCase ($ErrorActionPreference -ceq 'Stop') 'native-nonzero-exit-preference-restored'
+
+    $validFields = @(
+        '11111111-1111-1111-1111-111111111111',
+        '22222222-2222-2222-2222-222222222222',
+        '2', '1', '1', '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z')
+    $validResult = [pscustomobject]@{ Output = @(($validFields -join '|')); ExitCode = 0 }
+    $validGroup = ConvertFrom-SyntheticSampleGroupResult $validResult
+    Assert-OfflineCase ($validGroup.SessionId -ne [guid]::Empty -and
+        $validGroup.StreamId -ne [guid]::Empty -and $validGroup.From -lt $validGroup.To) `
+        'synthetic-valid-result'
+    Assert-OfflineSampleGuard ([pscustomobject]@{ Output = $validResult.Output; ExitCode = 7 }) `
+        'synthetic_query_failed'
+    Assert-OfflineSampleGuard ([pscustomobject]@{ Output = @(); ExitCode = 0 }) `
+        'synthetic_row_count_invalid'
+    Assert-OfflineSampleGuard ([pscustomobject]@{ Output = @($validResult.Output[0], $validResult.Output[0]); ExitCode = 0 }) `
+        'synthetic_row_count_invalid'
+    $invalidCases = @(
+        @{ Index = 6; Value = $null; Guard = 'synthetic_field_count_invalid' },
+        @{ Index = 2; Value = '3'; Guard = 'synthetic_sample_count_invalid' },
+        @{ Index = 3; Value = '0'; Guard = 'synthetic_gaze_count_invalid' },
+        @{ Index = 4; Value = '0'; Guard = 'synthetic_gameplay_count_invalid' },
+        @{ Index = 0; Value = 'invalid'; Guard = 'synthetic_identifiers_invalid' },
+        @{ Index = 5; Value = 'invalid'; Guard = 'synthetic_timestamps_invalid' },
+        @{ Index = 6; Value = '2026-01-01T00:16:00.000Z'; Guard = 'synthetic_window_invalid' })
+    foreach ($case in $invalidCases) {
+        $fields = @($validFields)
+        if ($null -eq $case.Value) { $fields = @($fields[0..5]) } else {
+            $fields[$case.Index] = $case.Value
+        }
+        Assert-OfflineSampleGuard ([pscustomobject]@{ Output = @(($fields -join '|')); ExitCode = 0 }) `
+            $case.Guard
+    }
+    $statusFailure = Get-FailureDiagnostic 'authenticated_page_one' `
+        'Historical read returned unexpected HTTP status 503.'
+    Assert-OfflineCase ($statusFailure.Guard -ceq 'authenticated_status_unexpected') 'http-status-guard-mapped'
+    $unknown = Get-FailureDiagnostic 'untrusted-stage' 'untrusted exception TOKEN-DO-NOT-PRINT'
+    Assert-OfflineCase ($unknown.Stage -ceq 'unknown' -and $unknown.Guard -ceq 'operation_failed') `
+        'unknown-stage-and-guard-fallback'
+    $formatted = Format-FailureDiagnostic 'patient_pkce_login' 'untrusted exception TOKEN-DO-NOT-PRINT'
+    Assert-OfflineCase ($formatted -match '^HISTORICAL_READ_FAILED: stage=patient_pkce_login; guard=operation_failed$' -and
+        $formatted -notmatch 'TOKEN-DO-NOT-PRINT') 'diagnostic-redacts-exception'
+    Write-Output 'HISTORICAL_OFFLINE_TESTS_PASSED: native-exits=0,7; stderr=discarded; preference-restored=2; synthetic-guards=10; safe-diagnostics=3'
+}
 
 function Assert-LoopbackOrigin([string] $Value) {
     $uri = $null
@@ -38,34 +168,16 @@ function Get-PublicEnvValue([string] $Key) {
     return $value
 }
 
-function Get-SyntheticSampleGroup {
-    # Never emit the row: it contains pseudonymous identifiers and sample times.
-    $sql = @'
-SELECT therapy_session_id, stream_id, count(*),
-       count(*) FILTER (WHERE sample_kind = 'GAZE'),
-       count(*) FILTER (WHERE sample_kind = 'GAMEPLAY'),
-       to_char(min(sample_time) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-       to_char(max(sample_time) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-FROM telemetry_samples
-GROUP BY therapy_session_id, stream_id;
-'@
-    Push-Location $repositoryRoot
-    try {
-        $lines = @(& docker compose exec -T telemetry-timescaledb `
-            psql -X -q -A -t -F '|' -v ON_ERROR_STOP=1 `
-            -U neurovision_telemetry -d neurovision_telemetry -c $sql 2>$null)
-        $exitCode = $LASTEXITCODE
-    } finally {
-        Pop-Location
-    }
-    if ($exitCode -ne 0 -or $lines.Count -ne 1) {
-        throw 'Expected one isolated synthetic sample group in the local TimescaleDB.'
-    }
+function ConvertFrom-SyntheticSampleGroupResult([psobject] $Result) {
+    # Do not expose native output: it contains pseudonymous identifiers and sample times.
+    if ($Result.ExitCode -ne 0) { throw 'The synthetic fixture query failed.' }
+    $lines = @($Result.Output)
+    if ($lines.Count -ne 1) { throw 'The synthetic fixture query returned an unexpected row count.' }
     $fields = $lines[0].Split('|')
-    if ($fields.Count -ne 7 -or $fields[2] -ne '2' -or
-            $fields[3] -ne '1' -or $fields[4] -ne '1') {
-        throw 'The local sample group is not the expected synthetic gaze/gameplay pair.'
-    }
+    if ($fields.Count -ne 7) { throw 'The synthetic fixture row has an unexpected field count.' }
+    if ($fields[2] -ne '2') { throw 'The synthetic fixture has an unexpected sample count.' }
+    if ($fields[3] -ne '1') { throw 'The synthetic fixture has an unexpected gaze count.' }
+    if ($fields[4] -ne '1') { throw 'The synthetic fixture has an unexpected gameplay count.' }
     $sessionId = [guid]::Empty
     $streamId = [guid]::Empty
     if (-not [guid]::TryParse($fields[0], [ref] $sessionId) -or
@@ -89,6 +201,28 @@ GROUP BY therapy_session_id, stream_id;
         throw 'The synthetic sample interval exceeds the historical-read limit.'
     }
     return @{ SessionId = $sessionId; StreamId = $streamId; From = $from; To = $to }
+}
+
+function Get-SyntheticSampleGroup {
+    # Never emit the row: it contains pseudonymous identifiers and sample times.
+    $sql = @'
+SELECT therapy_session_id, stream_id, count(*),
+       count(*) FILTER (WHERE sample_kind = 'GAZE'),
+       count(*) FILTER (WHERE sample_kind = 'GAMEPLAY'),
+       to_char(min(sample_time) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+       to_char(max(sample_time) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+FROM telemetry_samples
+GROUP BY therapy_session_id, stream_id;
+'@
+    Push-Location $repositoryRoot
+    try {
+        $result = Invoke-NativeCommand 'docker' @(
+            'compose', 'exec', '-T', 'telemetry-timescaledb', 'psql', '-X', '-q', '-A', '-t', '-F', '|',
+            '-v', 'ON_ERROR_STOP=1', '-U', 'neurovision_telemetry', '-d', 'neurovision_telemetry', '-c', $sql)
+    } finally {
+        Pop-Location
+    }
+    return ConvertFrom-SyntheticSampleGroupResult $result
 }
 
 function Assert-Ready([string] $Origin) {
@@ -268,20 +402,27 @@ function Assert-Page([hashtable] $Response, [bool] $ExpectCursor) {
 function Invoke-Smoke {
     $clinical = Assert-LoopbackOrigin $ClinicalBaseUrl
     $telemetry = Assert-LoopbackOrigin $TelemetryBaseUrl
+    $script:historicalStage = 'synthetic_fixture'
     $group = Get-SyntheticSampleGroup
+    $script:historicalStage = 'clinical_readiness'
     Assert-Ready $clinical
+    $script:historicalStage = 'telemetry_readiness'
     Assert-Ready $telemetry
     $baseQuery = '{0}/api/v1/telemetry/sessions/{1}/samples?streamId={2}&from={3}&to={4}&limit=1' -f `
         $telemetry, $group.SessionId, $group.StreamId,
         [uri]::EscapeDataString($group.From.ToString('o')),
         [uri]::EscapeDataString($group.To.ToString('o'))
+    $script:historicalStage = 'unauthenticated_read'
     $unauthenticated = Invoke-LocalGet $baseQuery
     Assert-Status $unauthenticated 401
     Write-Host 'LOCAL_READ_PREFLIGHT: ready=200; unauthenticated=401; samples=2; kinds=GAZE,GAMEPLAY'
     if ($PreflightOnly) { return }
+    $script:historicalStage = 'patient_pkce_login'
     $accessToken = Get-PatientAccessToken
+    $script:historicalStage = 'authenticated_page_one'
     $first = Assert-Page (Invoke-LocalGet $baseQuery $accessToken) $true
     $secondUrl = "$baseQuery&cursor=$([uri]::EscapeDataString($first.Cursor))"
+    $script:historicalStage = 'authenticated_page_two'
     $second = Assert-Page (Invoke-LocalGet $secondUrl $accessToken) $false
     $kinds = @($first.Sample.kind, $second.Sample.kind) | Sort-Object
     $firstKey = '{0}|{1}|{2}|{3}' -f $first.Sample.sampleTime, $first.Sample.batchId,
@@ -296,14 +437,14 @@ function Invoke-Smoke {
 }
 
 try {
+    if ($OfflineTests) {
+        Invoke-OfflineTests
+        exit 0
+    }
     Invoke-Smoke
 } catch {
     # Never leak URLs, tokens, identifiers, SQL rows, response bodies, or coordinates.
-    $message = if ($_.Exception.Message -match '^Historical read returned unexpected HTTP status [0-9]+\.$') {
-        $_.Exception.Message
-    } else {
-        'Historical-read smoke stopped safely; inspect local services and the synthetic fixture.'
-    }
+    $message = Format-FailureDiagnostic $script:historicalStage $_.Exception.Message
     Write-Error -Message $message -ErrorAction Continue
     exit 1
 }
