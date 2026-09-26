@@ -234,7 +234,25 @@ Do **not** add `-v` or remove images. Keep the Phase 13B JVM project separate.
 2. After starting with your authorized local `.env`, verify `docker compose ps` and `http://localhost:8084/q/health/ready`. TimescaleDB and Kafka topic provisioning gate Telemetry startup; Clinical is started on the same network. Clinical authorization still fails closed if Clinical is unavailable.
 3. In a **test-only patient account**, create or use an `ACTIVE` Clinical therapy session. Send a synthetic gaze/gameplay batch to `POST http://localhost:8084/api/v1/telemetry/batches` using its Cognito access token. A `202 BROKER_ACCEPTED` means Kafka acknowledged the event, **not** that TimescaleDB has committed it. Do not put the token in a committed script or terminal history. See the [batch contract](../../docs/plans/telemetry-phase-2-contract.md) and [Clinical authorization flow](../../docs/plans/telemetry-phase-3-http-batch-ingestion.md).
 4. Wait for the consumer, then inspect only synthetic pseudonymous IDs and counts: `docker compose exec -T telemetry-timescaledb psql -U neurovision_telemetry -d neurovision_telemetry -c 'SELECT count(*) FROM telemetry_batch_inbox; SELECT count(*) FROM telemetry_samples;'`. Query `GET /api/v1/telemetry/sessions/{therapySessionId}/samples` with the test token and a bounded stream/time window to verify historical replay. See the [read contract](../../docs/plans/telemetry-phase-7-historical-replay-query.md). A real end-to-end proof requires those responses and matching rows; green health alone is insufficient.
-5. Run `docker compose restart telemetry-service telemetry-timescaledb` and repeat the counts to confirm the named volume preserved synthetic rows. Never run `docker compose down -v` unless you intend to delete all local databases and Kafka data.
+5. Keep restart recovery separate from ingestion. The offline guards can be checked without Docker or service traffic:
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\test-telemetry-compose-recovery.ps1
+   ```
+
+   After confirming that the selected local Telemetry volume contains only synthetic test data, run the read-only preflight. It verifies the fixed Compose project, volume ownership, required dependency state, and non-empty aggregate baseline; output contains counts only.
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-telemetry-compose-recovery.ps1 -Mode Preflight -ConfirmSyntheticData
+   ```
+
+   Only after explicitly authorizing a brief local database and Telemetry outage, run the bounded recovery mode. It restarts only `telemetry-timescaledb` and `telemetry-service`, then requires their health/readiness and exact inbox/sample aggregate equality. The switch is an operator confirmation, not a safeguard against choosing real or shared data; do not proceed unless the volume is disposable synthetic-test state. The harness never publishes data, replays Kafka, performs cleanup, or proves an authenticated historical read. That final read still requires the separately authorized test identity and bounded query above.
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-telemetry-compose-recovery.ps1 -Mode AuthorizedRun -AuthorizeRestart -ConfirmSyntheticData
+   ```
+
+   A failed guard stops before restart. A failure after restart preserves the volume and reports no row data; inspect the local services before any retry. Never run `docker compose down -v` unless you intend to delete all local databases and Kafka data.
 
 The service integration tests cover authenticated HTTP, Kafka, and Timescale behavior with synthetic fixtures independently of this deployed Compose smoke. A complete deployed-stack smoke still needs a controlled test Cognito identity and Clinical session; do not bypass authorization for convenience. For an existing V1 TimescaleDB volume, follow the [V2 preflight](../../docs/plans/telemetry-v2-migration-preflight.md) before starting a V2/V3-capable Telemetry image. A new empty volume has no historical V1 rows to preflight.
 
