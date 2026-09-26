@@ -65,6 +65,20 @@ services:
     restart: unless-stopped
     networks: [neurovision]
 
+  analytics-mongodb:
+    image: mongo:8.0.14-noble
+    ports:
+      - "127.0.0.1:${ANALYTICS_MONGODB_PORT:-27017}:27017"
+    volumes:
+      - analytics-mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [neurovision]
+
   kafka:
     image: apache/kafka:4.3.1
     environment:
@@ -114,6 +128,7 @@ services:
          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic telemetry-batch-accepted.v1 --partitions 3 --replication-factor 1
          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic telemetry-batch-accepted.v1.dlq --partitions 3 --replication-factor 1
          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic neurovision.dlq-replay-audit.v1 --partitions 3 --replication-factor 1
+         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic analytics-telemetry.v1.dlq --partitions 3 --replication-factor 1
     restart: "no"
     networks: [neurovision]
 
@@ -227,6 +242,31 @@ services:
     restart: unless-stopped
     networks: [neurovision]
 
+  analytics-service:
+    image: neurovision/analytics-service:${NEUROVISION_IMAGE_TAG:-compose-native}
+    build:
+      context: ./analytics-service
+      dockerfile: src/main/docker/Dockerfile.native-micro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      ANALYTICS_MONGODB_CONNECTION_STRING: mongodb://analytics-mongodb:27017/neurovision_analytics
+      ANALYTICS_MONGODB_DATABASE: neurovision_analytics
+      CLINICAL_INTERNAL_BASE_URL: http://clinical-service:8080
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID}
+      COGNITO_ISSUER_URL: ${COGNITO_ISSUER_URL}
+      ANALYTICS_GAZE_PLOT_CURSOR_SIGNING_KEY: ${ANALYTICS_GAZE_PLOT_CURSOR_SIGNING_KEY:?Set ANALYTICS_GAZE_PLOT_CURSOR_SIGNING_KEY in your untracked .env}
+    ports:
+      - "127.0.0.1:${ANALYTICS_PORT:-8085}:8080"
+    depends_on:
+      analytics-mongodb:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      clinical-service:
+        condition: service_started
+    restart: unless-stopped
+    networks: [neurovision]
+
 networks:
   neurovision:
     name: neurovision-compose
@@ -236,4 +276,5 @@ volumes:
   profile-postgresql-data:
   clinical-postgresql-data:
   telemetry-timescaledb-data:
+  analytics-mongodb-data:
   kafka-data:
