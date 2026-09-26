@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: analytics-kafka-topics
+  namespace: neurovision
+spec:
+  template:
+    spec:
+      containers:
+        - name: create-topics
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1; do
+                echo "Waiting for isolated Kafka..."
+                sleep 3
+              done
+
+              for topic in telemetry-batch-accepted.v1 analytics-telemetry.v1.dlq; do
+                /opt/kafka/bin/kafka-topics.sh \
+                  --bootstrap-server kafka:9092 \
+                  --create \
+                  --if-not-exists \
+                  --topic "$topic" \
+                  --partitions 3 \
+                  --replication-factor 1
+              done

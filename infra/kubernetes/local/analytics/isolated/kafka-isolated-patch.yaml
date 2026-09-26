@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: neurovision
+spec:
+  template:
+    spec:
+      containers:
+        - name: kafka
+          env:
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://kafka.neurovision-analytics-smoke.svc.cluster.local:9092
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@kafka-0.kafka-headless.neurovision-analytics-smoke.svc.cluster.local:9093

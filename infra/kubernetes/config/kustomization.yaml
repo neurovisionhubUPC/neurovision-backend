@@ -6,3 +6,4 @@ resources:
   - profile-configmap.yaml
   - clinical-configmap.yaml
   - telemetry-configmap.yaml
+  - analytics-configmap.yaml

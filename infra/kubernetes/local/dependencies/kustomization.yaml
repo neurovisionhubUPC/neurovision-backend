@@ -6,5 +6,7 @@ resources:
   - profile-postgresql.yaml
   - clinical-postgresql.yaml
   - telemetry-timescaledb.yaml
+  - analytics-mongodb.yaml
   - kafka.yaml
   - kafka-topics-job.yaml
+  - analytics-kafka-topics-job.yaml
