@@ -12,6 +12,7 @@ $envPath = Join-Path $repositoryRoot '.env'
 $redirectUri = 'http://localhost:5173/auth/callback'
 $listenerPrefix = 'http://localhost:5173/'
 $script:historicalStage = 'mode_guard'
+$script:timestampFailureDiagnostic = ''
 
 function Get-FailureDiagnostic([string] $Stage, [string] $Message) {
     $safeStage = if ($Stage -in @(
@@ -56,15 +57,44 @@ function Get-FailureDiagnostic([string] $Stage, [string] $Message) {
 
 function Format-FailureDiagnostic([string] $Stage, [string] $Message) {
     $diagnostic = Get-FailureDiagnostic $Stage $Message
-    return ('HISTORICAL_READ_FAILED: stage={0}; guard={1}' -f $diagnostic.Stage, $diagnostic.Guard)
+    $formatted = 'HISTORICAL_READ_FAILED: stage={0}; guard={1}' -f $diagnostic.Stage, $diagnostic.Guard
+    $safeTimestampPattern = '^first_type=(null|string|other),first_length=(expected|other),' +
+        'first_shape=(true|false),first_whitespace=(true|false),first_parse=(true|false),' +
+        'second_type=(null|string|other),second_length=(expected|other),' +
+        'second_shape=(true|false),second_whitespace=(true|false),second_parse=(true|false)$'
+    if ($diagnostic.Guard -ceq 'synthetic_timestamps_invalid' -and
+            $script:timestampFailureDiagnostic -cmatch $safeTimestampPattern) {
+        $formatted += "; diagnostic=$($script:timestampFailureDiagnostic)"
+    }
+    return $formatted
 }
 
-function Invoke-NativeCommand([string] $Executable, [string[]] $Arguments) {
+function Get-SafeTimestampFieldDiagnostic([string] $Prefix, [object] $Value) {
+    $type = if ($null -eq $Value) { 'null' } elseif ($Value -is [string]) { 'string' } else { 'other' }
+    $text = if ($Value -is [string]) { $Value } else { '' }
+    $length = if ($text.Length -eq 24) { 'expected' } else { 'other' }
+    $shape = if ($text -cmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$') { 'true' } else { 'false' }
+    $whitespace = if ($text -match '\s') { 'true' } else { 'false' }
+    $parsed = [DateTimeOffset]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor
+        [Globalization.DateTimeStyles]::AdjustToUniversal
+    $parse = if ([DateTimeOffset]::TryParse($text, [Globalization.CultureInfo]::InvariantCulture,
+                $styles, [ref] $parsed)) { 'true' } else { 'false' }
+    return '{0}_type={1},{0}_length={2},{0}_shape={3},{0}_whitespace={4},{0}_parse={5}' -f `
+        $Prefix, $type, $length, $shape, $whitespace, $parse
+}
+
+function Invoke-NativeCommand([string] $Executable, [string[]] $Arguments,
+        [string] $StandardInput = $null) {
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         # Windows PowerShell 5.1 promotes native stderr to an error record; scope Continue to this call.
         $ErrorActionPreference = 'Continue'
-        $output = @(& $Executable @Arguments 2>$null)
+        if ($null -eq $StandardInput) {
+            $output = @(& $Executable @Arguments 2>$null)
+        } else {
+            $output = @($StandardInput | & $Executable @Arguments 2>$null)
+        }
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -76,7 +106,8 @@ function Assert-OfflineCase([bool] $Condition, [string] $Name) {
     if (-not $Condition) { throw "Offline historical-read test failed: $Name" }
 }
 
-function Assert-OfflineSampleGuard([psobject] $Result, [string] $ExpectedGuard) {
+function Assert-OfflineSampleGuard([psobject] $Result, [string] $ExpectedGuard,
+        [bool] $ExpectTimestampDiagnostic = $false) {
     $failure = $null
     try { $null = ConvertFrom-SyntheticSampleGroupResult $Result } catch {
         $failure = $_.Exception.Message
@@ -84,6 +115,16 @@ function Assert-OfflineSampleGuard([psobject] $Result, [string] $ExpectedGuard) 
     Assert-OfflineCase ($null -ne $failure) "$ExpectedGuard-thrown"
     $diagnostic = Get-FailureDiagnostic 'synthetic_fixture' $failure
     Assert-OfflineCase ($diagnostic.Guard -ceq $ExpectedGuard) "$ExpectedGuard-mapped"
+    if ($ExpectTimestampDiagnostic) {
+        $formatted = Format-FailureDiagnostic 'synthetic_fixture' $failure
+        $safePattern = '^HISTORICAL_READ_FAILED: stage=synthetic_fixture; guard=synthetic_timestamps_invalid; ' +
+            'diagnostic=first_type=(null|string|other),first_length=(expected|other),' +
+            'first_shape=(true|false),first_whitespace=(true|false),first_parse=(true|false),' +
+            'second_type=(null|string|other),second_length=(expected|other),' +
+            'second_shape=(true|false),second_whitespace=(true|false),second_parse=(true|false)$'
+        Assert-OfflineCase ($formatted -cmatch $safePattern -and
+            $formatted -notmatch 'TIMESTAMP-DO-NOT-PRINT') 'timestamp-diagnostic-allowlisted'
+    }
 }
 
 function Invoke-OfflineTests {
@@ -97,6 +138,10 @@ function Invoke-OfflineTests {
     Assert-OfflineCase ($nativeFailure.ExitCode -eq 7) 'native-stderr-nonzero-exit-captured'
     Assert-OfflineCase (($nativeFailure.Output -join "`n") -notmatch 'NATIVE-STDERR-CANARY') 'native-failure-stderr-discarded'
     Assert-OfflineCase ($ErrorActionPreference -ceq 'Stop') 'native-nonzero-exit-preference-restored'
+    $nativeStdin = Invoke-NativeCommand $cmd @('/d', '/c', 'more') 'SQL-QUOTE-"T"-CANARY'
+    Assert-OfflineCase ($nativeStdin.ExitCode -eq 0 -and
+        ($nativeStdin.Output -join "`n") -match 'SQL-QUOTE-"T"-CANARY') 'native-stdin-preserves-quotes'
+    Assert-OfflineCase ($ErrorActionPreference -ceq 'Stop') 'native-stdin-preference-restored'
 
     $validFields = @(
         '11111111-1111-1111-1111-111111111111',
@@ -119,7 +164,8 @@ function Invoke-OfflineTests {
         @{ Index = 3; Value = '0'; Guard = 'synthetic_gaze_count_invalid' },
         @{ Index = 4; Value = '0'; Guard = 'synthetic_gameplay_count_invalid' },
         @{ Index = 0; Value = 'invalid'; Guard = 'synthetic_identifiers_invalid' },
-        @{ Index = 5; Value = 'invalid'; Guard = 'synthetic_timestamps_invalid' },
+        @{ Index = 5; Value = 'TIMESTAMP-DO-NOT-PRINT'; Guard = 'synthetic_timestamps_invalid'; Diagnostic = $true },
+        @{ Index = 6; Value = 'TIMESTAMP-DO-NOT-PRINT'; Guard = 'synthetic_timestamps_invalid'; Diagnostic = $true },
         @{ Index = 6; Value = '2026-01-01T00:16:00.000Z'; Guard = 'synthetic_window_invalid' })
     foreach ($case in $invalidCases) {
         $fields = @($validFields)
@@ -127,7 +173,7 @@ function Invoke-OfflineTests {
             $fields[$case.Index] = $case.Value
         }
         Assert-OfflineSampleGuard ([pscustomobject]@{ Output = @(($fields -join '|')); ExitCode = 0 }) `
-            $case.Guard
+            $case.Guard ([bool] $case.Diagnostic)
     }
     $statusFailure = Get-FailureDiagnostic 'authenticated_page_one' `
         'Historical read returned unexpected HTTP status 503.'
@@ -138,7 +184,7 @@ function Invoke-OfflineTests {
     $formatted = Format-FailureDiagnostic 'patient_pkce_login' 'untrusted exception TOKEN-DO-NOT-PRINT'
     Assert-OfflineCase ($formatted -match '^HISTORICAL_READ_FAILED: stage=patient_pkce_login; guard=operation_failed$' -and
         $formatted -notmatch 'TOKEN-DO-NOT-PRINT') 'diagnostic-redacts-exception'
-    Write-Output 'HISTORICAL_OFFLINE_TESTS_PASSED: native-exits=0,7; stderr=discarded; preference-restored=2; synthetic-guards=10; safe-diagnostics=3'
+    Write-Output 'HISTORICAL_OFFLINE_TESTS_PASSED: native-exits=0,7; stdin=quoted-canary-preserved; stderr=discarded; preference-restored=3; synthetic-guards=11; safe-diagnostics=5'
 }
 
 function Assert-LoopbackOrigin([string] $Value) {
@@ -170,6 +216,7 @@ function Get-PublicEnvValue([string] $Key) {
 
 function ConvertFrom-SyntheticSampleGroupResult([psobject] $Result) {
     # Do not expose native output: it contains pseudonymous identifiers and sample times.
+    $script:timestampFailureDiagnostic = ''
     if ($Result.ExitCode -ne 0) { throw 'The synthetic fixture query failed.' }
     $lines = @($Result.Output)
     if ($lines.Count -ne 1) { throw 'The synthetic fixture query returned an unexpected row count.' }
@@ -193,6 +240,9 @@ function ConvertFrom-SyntheticSampleGroupResult([psobject] $Result) {
                 $styles, [ref] $first) -or
             -not [DateTimeOffset]::TryParse($fields[6], [Globalization.CultureInfo]::InvariantCulture,
                 $styles, [ref] $last)) {
+        $firstDiagnostic = Get-SafeTimestampFieldDiagnostic 'first' $fields[5]
+        $secondDiagnostic = Get-SafeTimestampFieldDiagnostic 'second' $fields[6]
+        $script:timestampFailureDiagnostic = '{0},{1}' -f $firstDiagnostic, $secondDiagnostic
         throw 'The local synthetic group has invalid sample times.'
     }
     $from = $first.AddSeconds(-1)
@@ -218,7 +268,7 @@ GROUP BY therapy_session_id, stream_id;
     try {
         $result = Invoke-NativeCommand 'docker' @(
             'compose', 'exec', '-T', 'telemetry-timescaledb', 'psql', '-X', '-q', '-A', '-t', '-F', '|',
-            '-v', 'ON_ERROR_STOP=1', '-U', 'neurovision_telemetry', '-d', 'neurovision_telemetry', '-c', $sql)
+            '-v', 'ON_ERROR_STOP=1', '-U', 'neurovision_telemetry', '-d', 'neurovision_telemetry', '-f', '-') $sql
     } finally {
         Pop-Location
     }
