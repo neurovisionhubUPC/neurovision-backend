@@ -1,8 +1,10 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Preflight', 'AuthorizedRun', 'OfflineTest')]
+    [ValidateSet('Preflight', 'AuthorizedRun', 'OutageRun', 'OfflineTest')]
     [string] $Mode = 'Preflight',
     [switch] $AuthorizeRestart,
+    [switch] $AuthorizeDatabaseOutage,
+    [switch] $KeepTelemetryRunning,
     [switch] $ConfirmSyntheticData
 )
 
@@ -14,17 +16,22 @@ $composeFile = Join-Path $repositoryRoot 'compose.yaml'
 $databaseService = 'telemetry-timescaledb'
 $telemetryService = 'telemetry-service'
 $script:recoveryStage = 'mode_guard'
+$script:outageStopSucceeded = $false
+$script:outageRestorationAttempted = $false
+$script:outageRestored = $false
 
 function Get-FailureDiagnostic([string] $Stage, [string] $Message) {
     $safeStage = if ($Stage -in @(
         'mode_guard', 'compose_file', 'compose_config', 'compose_model', 'volume_labels',
         'dependencies', 'clinical_readiness', 'telemetry_readiness', 'baseline_snapshot',
         'database_restart', 'database_health', 'telemetry_restart', 'telemetry_health',
-        'post_snapshot')) { $Stage } else { 'unknown' }
+        'post_snapshot', 'database_stop', 'telemetry_running', 'database_start',
+        'outage_database_health', 'outage_telemetry_health', 'outage_post_snapshot')) { $Stage } else { 'unknown' }
     $guard = switch -CaseSensitive ($Message) {
         'Preflight requires synthetic-data confirmation and forbids restart authorization.' { 'preflight_mode_invalid' }
         'AuthorizedRun requires explicit restart authorization and synthetic-data confirmation.' { 'authorized_mode_invalid' }
         'OfflineTest does not accept runtime authorization switches.' { 'offline_mode_invalid' }
+        'OutageRun requires exact database-outage authorization, synthetic-data confirmation, and Telemetry-running confirmation only.' { 'outage_mode_invalid' }
         'The root Compose file is unavailable.' { 'compose_file_unavailable' }
         'Docker Compose inspection or scoped operation failed.' { 'compose_operation_failed' }
         'Docker Compose configuration could not be safely inspected.' { 'compose_config_invalid' }
@@ -45,17 +52,25 @@ function Get-FailureDiagnostic([string] $Stage, [string] $Message) {
         'Telemetry aggregate snapshot contains invalid metadata.' { 'snapshot_metadata_invalid' }
         'Existing synthetic baseline is empty or violates Telemetry aggregate invariants.' { 'baseline_invalid' }
         'Persisted Telemetry aggregates changed across the restart.' { 'persisted_aggregates_changed' }
+        'Persisted Telemetry aggregates changed across the database outage.' { 'persisted_aggregates_changed' }
+        'Telemetry did not remain running during the database outage.' { 'telemetry_not_running_during_outage' }
         'A restarted local Compose service did not become healthy within the bounded wait.' { 'database_health_timeout' }
+        'The restored TimescaleDB service did not become healthy within the bounded wait.' { 'database_health_timeout' }
         'Telemetry readiness did not recover within the bounded wait.' { 'telemetry_health_timeout' }
         default { 'operation_failed' }
     }
     return [pscustomobject]@{ Stage = $safeStage; Guard = $guard }
 }
 
-function Format-FailureDiagnostic([string] $Stage, [string] $Message) {
+function Format-FailureDiagnostic([string] $Stage, [string] $Message, [bool] $OutageMode = $false,
+        [bool] $RestorationAttempted = $false, [bool] $Restored = $false) {
     $diagnostic = Get-FailureDiagnostic $Stage $Message
-    return ("Telemetry Compose recovery stopped safely; stage={0}; guard={1}; no cleanup or ingestion was attempted." -f `
-        $diagnostic.Stage, $diagnostic.Guard)
+    if ($OutageMode) {
+        $restoration = if (-not $RestorationAttempted) { 'not_required' } elseif ($Restored) { 'succeeded' } else { 'failed' }
+        return ("Telemetry Compose outage stopped safely; stage={0}; guard={1}; restoration={2}; no cleanup or ingestion was attempted." -f `
+            $diagnostic.Stage, $diagnostic.Guard, $restoration)
+    }
+    return ("Telemetry Compose recovery stopped safely; stage={0}; guard={1}; no cleanup or ingestion was attempted." -f $diagnostic.Stage, $diagnostic.Guard)
 }
 
 function Assert-RecoveryContext([string] $Project, [string] $VolumeKey, [string] $VolumeName) {
@@ -107,14 +122,21 @@ function Assert-Throws([scriptblock] $Action, [string] $Name) {
     Assert-OfflineCase $failed $Name
 }
 
-function Assert-ModeSelection([string] $SelectedMode, [bool] $Authorized, [bool] $SyntheticConfirmed) {
+function Assert-ModeSelection([string] $SelectedMode, [bool] $Authorized, [bool] $SyntheticConfirmed,
+        [bool] $OutageAuthorized = $false, [bool] $TelemetryRetained = $false) {
     if ($SelectedMode -eq 'Preflight' -and ($Authorized -or -not $SyntheticConfirmed)) {
         throw 'Preflight requires synthetic-data confirmation and forbids restart authorization.'
     }
-    if ($SelectedMode -eq 'AuthorizedRun' -and (-not $Authorized -or -not $SyntheticConfirmed)) {
+    if ($SelectedMode -eq 'Preflight' -and ($OutageAuthorized -or $TelemetryRetained)) {
+        throw 'Preflight requires synthetic-data confirmation and forbids restart authorization.'
+    }
+    if ($SelectedMode -eq 'AuthorizedRun' -and (-not $Authorized -or -not $SyntheticConfirmed -or $OutageAuthorized -or $TelemetryRetained)) {
         throw 'AuthorizedRun requires explicit restart authorization and synthetic-data confirmation.'
     }
-    if ($SelectedMode -eq 'OfflineTest' -and ($Authorized -or $SyntheticConfirmed)) {
+    if ($SelectedMode -eq 'OutageRun' -and ($Authorized -or -not $SyntheticConfirmed -or -not $OutageAuthorized -or -not $TelemetryRetained)) {
+        throw 'OutageRun requires exact database-outage authorization, synthetic-data confirmation, and Telemetry-running confirmation only.'
+    }
+    if ($SelectedMode -eq 'OfflineTest' -and ($Authorized -or $SyntheticConfirmed -or $OutageAuthorized -or $TelemetryRetained)) {
         throw 'OfflineTest does not accept runtime authorization switches.'
     }
 }
@@ -157,6 +179,10 @@ function Invoke-OfflineTests {
     Assert-Throws { Assert-ModeSelection 'Preflight' $true $true } 'restart-switch-refused-in-preflight'
     Assert-Throws { Assert-ModeSelection 'AuthorizedRun' $false $true } 'missing-restart-authorization-refused'
     Assert-Throws { Assert-ModeSelection 'AuthorizedRun' $true $false } 'missing-synthetic-attestation-refused'
+    Assert-ModeSelection 'OutageRun' $false $true $true $true
+    Assert-Throws { Assert-ModeSelection 'OutageRun' $false $true $false $true } 'outage-mode-requires-outage-authorization'
+    Assert-Throws { Assert-ModeSelection 'OutageRun' $false $true $true $false } 'outage-mode-requires-telemetry-retention-confirmation'
+    Assert-Throws { Assert-ModeSelection 'OutageRun' $true $true $true $true } 'outage-mode-forbids-restart-authorization'
     Assert-Throws { Assert-ModeSelection 'OfflineTest' $false $true } 'offline-runtime-switch-refused'
     $nativeSuccess = Invoke-NativeCommand $env:ComSpec @('/d', '/c', 'echo NATIVE-STDOUT-CAPTURE-CANARY & echo NATIVE-STDERR-REDACTION-CANARY 1>&2')
     Assert-OfflineCase ($nativeSuccess.ExitCode -eq 0) 'native-stderr-zero-exit-captured'
@@ -206,12 +232,68 @@ function Invoke-OfflineTests {
     Assert-OfflineCase (Test-DatabaseReadyState @($healthyDatabase)) 'database-ready-state-accepted'
     Assert-OfflineCase (-not (Test-DatabaseReadyState @($startingDatabase))) `
         'database-not-healthy-state-rejected'
+    $outageEvents = [System.Collections.Generic.List[string]]::new()
+    $successOps = [pscustomobject]@{
+        StopDatabase = { $outageEvents.Add('stop:telemetry-timescaledb') }
+        AssertTelemetryRunning = { $outageEvents.Add('assert-running:telemetry-service') }
+        StartDatabase = { $outageEvents.Add('start:telemetry-timescaledb') }
+        WaitDatabase = { $outageEvents.Add('wait-healthy:telemetry-timescaledb') }
+        WaitTelemetry = { $outageEvents.Add('wait-ready:telemetry-service') }
+        GetSnapshot = { $good.PSObject.Copy() }
+    }
+    Invoke-DatabaseOutage $successOps $good
+    Assert-OfflineCase ($script:outageStopSucceeded -and $script:outageRestorationAttempted -and $script:outageRestored) `
+        'outage-success-state-restored'
+    $successDiagnostic = Format-FailureDiagnostic 'telemetry_running' 'Telemetry did not remain running during the database outage.' `
+        $true $script:outageRestorationAttempted $script:outageRestored
+    Assert-OfflineCase ($successDiagnostic -match 'restoration=succeeded') 'outage-success-diagnostic-state'
+    Assert-OfflineCase (($outageEvents -join ',') -ceq 'stop:telemetry-timescaledb,assert-running:telemetry-service,start:telemetry-timescaledb,wait-healthy:telemetry-timescaledb,wait-ready:telemetry-service') `
+        'outage-commands-scoped-and-ordered'
+    $preStopEvents = [System.Collections.Generic.List[string]]::new()
+    $preStopOps = [pscustomobject]@{
+        StopDatabase = { $preStopEvents.Add('stop-attempt'); throw 'Docker Compose inspection or scoped operation failed.' }
+        AssertTelemetryRunning = { throw 'unexpected' }; StartDatabase = { $preStopEvents.Add('start') }
+        WaitDatabase = { $preStopEvents.Add('wait') }; WaitTelemetry = {}; GetSnapshot = { $good }
+    }
+    Assert-Throws { Invoke-DatabaseOutage $preStopOps $good } 'outage-stop-failure-propagated'
+    Assert-OfflineCase (-not $script:outageStopSucceeded -and -not $script:outageRestorationAttempted -and
+        ($preStopEvents -join ',') -ceq 'stop-attempt') 'outage-pre-stop-failure-no-compensation'
+    $preStopDiagnostic = Format-FailureDiagnostic 'database_stop' 'Docker Compose inspection or scoped operation failed.' `
+        $true $script:outageRestorationAttempted $script:outageRestored
+    Assert-OfflineCase ($preStopDiagnostic -match 'restoration=not_required') 'outage-pre-stop-diagnostic-state'
+    $postStopEvents = [System.Collections.Generic.List[string]]::new()
+    $postStopOps = [pscustomobject]@{
+        StopDatabase = { $postStopEvents.Add('stop:telemetry-timescaledb') }
+        AssertTelemetryRunning = { $postStopEvents.Add('assert-running:telemetry-service'); throw 'Telemetry did not remain running during the database outage.' }
+        StartDatabase = { $postStopEvents.Add('start:telemetry-timescaledb') }
+        WaitDatabase = { $postStopEvents.Add('wait-healthy:telemetry-timescaledb') }
+        WaitTelemetry = {}; GetSnapshot = { $good }
+    }
+    Assert-Throws { Invoke-DatabaseOutage $postStopOps $good } 'outage-post-stop-failure-propagated'
+    Assert-OfflineCase ($script:outageStopSucceeded -and $script:outageRestorationAttempted -and $script:outageRestored -and
+        ($postStopEvents -join ',') -ceq 'stop:telemetry-timescaledb,assert-running:telemetry-service,start:telemetry-timescaledb,wait-healthy:telemetry-timescaledb') `
+        'outage-post-stop-compensation-is-scoped-and-bounded'
+    $failedRestoreEvents = [System.Collections.Generic.List[string]]::new()
+    $failedRestoreOps = [pscustomobject]@{
+        StopDatabase = { $failedRestoreEvents.Add('stop:telemetry-timescaledb') }
+        AssertTelemetryRunning = { throw 'Telemetry did not remain running during the database outage.' }
+        StartDatabase = { $failedRestoreEvents.Add('start:telemetry-timescaledb'); throw 'Docker Compose inspection or scoped operation failed.' }
+        WaitDatabase = { $failedRestoreEvents.Add('wait-healthy:telemetry-timescaledb') }
+        WaitTelemetry = {}; GetSnapshot = { $good }
+    }
+    Assert-Throws { Invoke-DatabaseOutage $failedRestoreOps $good } 'outage-restoration-failure-propagated'
+    $failedDiagnostic = Format-FailureDiagnostic 'telemetry_running' 'Telemetry did not remain running during the database outage.' `
+        $true $script:outageRestorationAttempted $script:outageRestored
+    Assert-OfflineCase ($failedDiagnostic -match 'restoration=failed') 'outage-failed-diagnostic-state'
+    Assert-OfflineCase ($script:outageRestorationAttempted -and -not $script:outageRestored -and
+        ($failedRestoreEvents -join ',') -ceq 'stop:telemetry-timescaledb,start:telemetry-timescaledb') `
+        'outage-restoration-failure-diagnostic-state'
     $changed = [pscustomobject]@{
         InboxCount = [long] 2; SampleCount = [long] 5; GazeCount = [long] 3
         GameplayCount = [long] 2; DuplicateSampleKeys = [long] 0
     }
     Assert-Throws { Assert-SameSnapshot $good $changed } 'aggregate-change-detected'
-    Write-Output 'OFFLINE_TESTS_PASSED: guard-refusals=9; database-readiness-predicate=2; aggregate-equality=1; aggregate-change-detected=1; diagnostic-stage-guards=14; safe-fallback=1; exception-redaction=1; native-stderr-exits=2; native-stderr-redaction=2; error-preference-restoration=2'
+    Write-Output 'OFFLINE_TESTS_PASSED: guard-refusals=12; database-readiness-predicate=2; aggregate-equality=1; aggregate-change-detected=1; outage-state-compensation=4; outage-restoration-diagnostics=3; outage-scoped-command-order=1; diagnostic-stage-guards=14; safe-fallback=1; exception-redaction=1; native-stderr-exits=2; native-stderr-redaction=2; error-preference-restoration=2'
 }
 
 function Invoke-NativeCommand([string] $Executable, [string[]] $Arguments) {
@@ -353,13 +435,14 @@ FROM telemetry_samples;
     return Convert-DatabaseSnapshot $lines
 }
 
-function Wait-ForDatabaseReady([int] $TimeoutSeconds = 90) {
+function Wait-ForDatabaseReady([int] $TimeoutSeconds = 90, [bool] $OutageRecovery = $false) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         $state = Get-ComposeState
         if (Test-DatabaseReadyState $state) { return }
         Start-Sleep -Seconds 2
     }
+    if ($OutageRecovery) { throw 'The restored TimescaleDB service did not become healthy within the bounded wait.' }
     throw 'A restarted local Compose service did not become healthy within the bounded wait.'
 }
 
@@ -378,6 +461,76 @@ function Wait-ForTelemetryReady([int] $TimeoutSeconds = 90) {
         Start-Sleep -Seconds 2
     }
     throw 'Telemetry readiness did not recover within the bounded wait.'
+}
+
+function Assert-TelemetryRunning {
+    $matches = @(Get-ComposeState | Where-Object { $_.Service -ceq $telemetryService })
+    if ($matches.Count -ne 1 -or $matches[0].State -cne 'running') {
+        throw 'Telemetry did not remain running during the database outage.'
+    }
+}
+
+function Invoke-DatabaseOutage([pscustomobject] $Operations, [pscustomobject] $Before, [bool] $EmitResult = $false) {
+    $script:outageStopSucceeded = $false
+    $script:outageRestorationAttempted = $false
+    $script:outageRestored = $false
+    $failureMessage = $null
+    $failureStage = $null
+    try {
+        $script:recoveryStage = 'database_stop'
+        & $Operations.StopDatabase
+        $script:outageStopSucceeded = $true
+
+        $script:recoveryStage = 'telemetry_running'
+        & $Operations.AssertTelemetryRunning
+
+        $script:outageRestorationAttempted = $true
+        $script:recoveryStage = 'database_start'
+        & $Operations.StartDatabase
+        $script:recoveryStage = 'outage_database_health'
+        & $Operations.WaitDatabase
+        $script:outageRestored = $true
+
+        $script:recoveryStage = 'outage_telemetry_health'
+        & $Operations.WaitTelemetry
+        $script:recoveryStage = 'outage_post_snapshot'
+        Assert-SameSnapshot $Before (& $Operations.GetSnapshot)
+        if ($EmitResult) {
+            Write-Output ('OUTAGE_RECOVERY_PASSED: database=healthy; telemetry=ready; restoration=succeeded; inboxRows={0}; samples={1}; gazeRows={2}; gameplayRows={3}; duplicateSampleKeys={4}; historicalRead=not-checked' -f `
+                $Before.InboxCount, $Before.SampleCount, $Before.GazeCount, $Before.GameplayCount, $Before.DuplicateSampleKeys)
+        }
+    } catch {
+        $failureMessage = $_.Exception.Message
+        $failureStage = $script:recoveryStage
+    } finally {
+        if ($script:outageStopSucceeded -and -not $script:outageRestorationAttempted) {
+            $script:outageRestorationAttempted = $true
+            try {
+                $script:recoveryStage = 'database_start'
+                & $Operations.StartDatabase
+                $script:recoveryStage = 'outage_database_health'
+                & $Operations.WaitDatabase
+                $script:outageRestored = $true
+            } catch {
+                $script:outageRestored = $false
+            }
+        }
+    }
+    if ($null -ne $failureMessage) {
+        $script:recoveryStage = $failureStage
+        throw $failureMessage
+    }
+}
+
+function New-LiveOutageOperations {
+    return [pscustomobject]@{
+        StopDatabase = { [void] (Invoke-Compose @('stop', $databaseService)) }
+        AssertTelemetryRunning = { Assert-TelemetryRunning }
+        StartDatabase = { [void] (Invoke-Compose @('start', $databaseService)) }
+        WaitDatabase = { Wait-ForDatabaseReady 90 $true }
+        WaitTelemetry = { Wait-ForTelemetryReady }
+        GetSnapshot = { Get-DatabaseSnapshot }
+    }
 }
 
 function Invoke-Recovery([bool] $RunRestart) {
@@ -422,18 +575,29 @@ function Invoke-Recovery([bool] $RunRestart) {
 
 try {
     if ($Mode -eq 'OfflineTest') {
-        Assert-ModeSelection $Mode ([bool] $AuthorizeRestart) ([bool] $ConfirmSyntheticData)
+        Assert-ModeSelection $Mode ([bool] $AuthorizeRestart) ([bool] $ConfirmSyntheticData) `
+            ([bool] $AuthorizeDatabaseOutage) ([bool] $KeepTelemetryRunning)
         Invoke-OfflineTests
         exit 0
     }
     if ($Mode -eq 'Preflight') {
-        Assert-ModeSelection $Mode ([bool] $AuthorizeRestart) ([bool] $ConfirmSyntheticData)
+        Assert-ModeSelection $Mode ([bool] $AuthorizeRestart) ([bool] $ConfirmSyntheticData) `
+            ([bool] $AuthorizeDatabaseOutage) ([bool] $KeepTelemetryRunning)
         Invoke-Recovery $false
         exit 0
     }
-    Assert-ModeSelection $Mode ([bool] $AuthorizeRestart) ([bool] $ConfirmSyntheticData)
-    Invoke-Recovery $true
+    Assert-ModeSelection $Mode ([bool] $AuthorizeRestart) ([bool] $ConfirmSyntheticData) `
+        ([bool] $AuthorizeDatabaseOutage) ([bool] $KeepTelemetryRunning)
+    if ($Mode -eq 'AuthorizedRun') {
+        Invoke-Recovery $true
+    } else {
+        Invoke-Recovery $false
+        $before = Get-DatabaseSnapshot
+        Assert-Snapshot $before
+        Invoke-DatabaseOutage (New-LiveOutageOperations) $before $true
+    }
 } catch {
-    Write-Error -Message (Format-FailureDiagnostic $script:recoveryStage $_.Exception.Message) -ErrorAction Continue
+    Write-Error -Message (Format-FailureDiagnostic $script:recoveryStage $_.Exception.Message `
+        ($Mode -eq 'OutageRun') $script:outageRestorationAttempted $script:outageRestored) -ErrorAction Continue
     exit 1
 }

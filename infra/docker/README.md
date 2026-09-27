@@ -246,13 +246,19 @@ Do **not** add `-v` or remove images. Keep the Phase 13B JVM project separate.
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-telemetry-compose-recovery.ps1 -Mode Preflight -ConfirmSyntheticData
    ```
 
-   Only after explicitly authorizing a brief local database and Telemetry outage, run the bounded recovery mode. It restarts only `telemetry-timescaledb` and `telemetry-service`, then requires their health/readiness and exact inbox/sample aggregate equality. The switch is an operator confirmation, not a safeguard against choosing real or shared data; do not proceed unless the volume is disposable synthetic-test state. The harness never publishes data, replays Kafka, performs cleanup, or proves an authenticated historical read. That final read still requires the separately authorized test identity and bounded query above.
+   Only after explicitly authorizing a brief local database and Telemetry restart, run the existing bounded restart mode. It restarts only `telemetry-timescaledb` and `telemetry-service`, then requires their health/readiness and exact safe aggregate equality. This mode is unchanged by the separate outage check below.
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-telemetry-compose-recovery.ps1 -Mode AuthorizedRun -AuthorizeRestart -ConfirmSyntheticData
    ```
 
-   A failed guard stops before restart. A failure after restart preserves the volume and reports no row data; inspect the local services before any retry. Never run `docker compose down -v` unless you intend to delete all local databases and Kafka data.
+   The separate outage mode stops and starts **only** TimescaleDB; Telemetry is required to remain running. Use it only after a separate, explicit authorization for that specific local synthetic-data outage and only when the named volume is disposable synthetic-test state:
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-telemetry-compose-recovery.ps1 -Mode OutageRun -AuthorizeDatabaseOutage -ConfirmSyntheticData -KeepTelemetryRunning
+   ```
+
+   The three confirmation switches are all required; this mode rejects the restart authorization switch. It verifies Telemetry is still running during the outage, starts only `telemetry-timescaledb`, waits for its health and then Telemetry readiness, and compares the same aggregate snapshot. Compose dependency declarations gate startup only, so no Java/Phase 9 readiness behavior is implied by this local harness. No ingestion, replay, database mutation, volume removal, `down`, or Telemetry restart occurs. Failures before a successful database stop report `restoration=not_required`; later failures make at most one scoped database start/health attempt and report `restoration=succeeded` or `restoration=failed`. On failure, inspect both local services before any retry; do not assume a failed restoration is safe to retry blindly. Neither mode proves an authenticated historical read. Never run `docker compose down -v` unless you intend to delete all local databases and Kafka data.
 
 The service integration tests cover authenticated HTTP, Kafka, and Timescale behavior with synthetic fixtures independently of this deployed Compose smoke. A complete deployed-stack smoke still needs a controlled test Cognito identity and Clinical session; do not bypass authorization for convenience. For an existing V1 TimescaleDB volume, follow the [V2 preflight](../../docs/plans/telemetry-v2-migration-preflight.md) before starting a V2/V3-capable Telemetry image. A new empty volume has no historical V1 rows to preflight.
 
