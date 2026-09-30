@@ -5,6 +5,67 @@ an ingress route for Telemetry. Port-forward its ClusterIP Service to loopback
 only when running an authorized HTTP smoke test. The Clinical internal API stays
 on its existing ClusterIP Service; do not route `/api/internal/*` publicly.
 
+## Phase 11 rolling-restart increment (offline-prepared)
+
+The Telemetry Deployment now declares a single-replica `RollingUpdate` with
+`maxSurge: 1`, `maxUnavailable: 0`, a 45-second termination grace period, and
+Quarkus HTTP graceful-shutdown timeout of 30 seconds. Those bounds cover
+Kubernetes termination and HTTP request draining only; they do **not** prove
+Kafka messaging drain. The renderer and fake-only checks are the only evidence
+from this increment; **no k3d restart, rebalance, canary, persistence, or
+runtime proof is claimed**.
+
+Run the PowerShell 5.1 offline contract checks (default mode performs no
+external command):
+
+```powershell
+.\infra\kubernetes\local\telemetry\test-rolling-rebalance.ps1
+```
+
+`-Mode Preflight` is read-only and fails closed unless the caller supplies the
+exact `-ExpectedImage` and observed `-ExpectedGeneration`; it checks the exact
+local context, namespace, single Deployment/pod, strategy, image, and consumer
+group plus the exact Kafka and TimescaleDB dependency images/readiness. Its
+consumer output is reduced to partition/member/offset/lag aggregates.
+`-Mode AuthorizedRollout` additionally requires both
+`-AuthorizeRollingRestart` and `-ConfirmSyntheticData`; it is the only mode in
+this increment that issues a rollout restart. It reports privacy-safe before
+and after Deployment and consumer-group aggregates, requires pod replacement,
+and requires the exact target group/topic to have an active pre-restart member
+and zero lag. It hashes the in-memory member/partition assignments; after
+restart, the member fingerprint must change, offsets must not regress, and
+membership/offset/lag must stabilize for three samples five seconds apart.
+These checks can demonstrate group leave/rejoin and offset recovery, not drain
+of in-flight Kafka work; only exact-once/idempotency canary evidence can cover
+that behavior. These checks are a prepared runtime harness, not evidence that
+they ran.
+Before restarting it writes a fixed one-shot flag under the user's local
+application-data directory; the flag
+contains no runtime identifiers or payload data and is intentionally not reset
+automatically. Do not retry an ambiguous invocation or delete the flag as a
+recovery shortcut.
+
+Failed preflight checks report only a fixed stage/code (for example,
+`[stage=consumer-group-parse; code=parse_or_scope_mismatch]`); command output,
+JSON fields, IDs, hosts, and exception text are suppressed. Unknown failures
+use a generic `unknown/operation_failed` diagnostic.
+
+`-Mode AuthorizedCanary` requires `-AuthorizeRollingRestart`,
+`-AuthorizeSyntheticCanary`, and `-ConfirmSyntheticData`, but intentionally
+stops before any command. The existing V1 fixture proves a valid wire shape,
+but direct Kafka publication would bypass Telemetry's Clinical session
+authorization boundary, and this increment does not yet have an approved
+synthetic HTTP identity plus a verified exact-canary Timescale aggregate query.
+Do not work around this by replaying the historical authenticated smoke, using
+real identity, or publishing directly to Kafka. A future canary increment must
+add one-shot state, exact before/after inbox/sample/duplicate/DLQ aggregates,
+consumer group member/offset/lag stabilization, and proof that replaying the
+same batch does not add samples. DLQ inspection must remain aggregate-only.
+
+No command in this section starts k3d, applies manifests, modifies Kafka or a
+database, accesses AWS/Cognito/OIDC, stages changes, or commits. Rollout and
+canary permissions are separate from this offline-prepared code change.
+
 ## Before deployment
 
 1. Confirm the context is `k3d-neurovision-local` and Clinical's existing

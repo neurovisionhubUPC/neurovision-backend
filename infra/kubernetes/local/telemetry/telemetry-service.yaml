@@ -28,7 +28,10 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: telemetry-service
@@ -39,6 +42,7 @@ spec:
         app.kubernetes.io/component: telemetry
         app.kubernetes.io/part-of: neurovision-rehab
     spec:
+      terminationGracePeriodSeconds: 45
       containers:
         - name: telemetry-service
           image: neurovision/telemetry-service:k3d-historical-20260918-80a8ac10
@@ -51,6 +55,9 @@ spec:
                 name: telemetry-service-config
             - secretRef:
                 name: telemetry-database-credentials
+          env:
+            - name: QUARKUS_SHUTDOWN_TIMEOUT
+              value: 30s
           startupProbe:
             httpGet:
               path: /q/health/started
