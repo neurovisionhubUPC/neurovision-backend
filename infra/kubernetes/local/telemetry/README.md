@@ -1,6 +1,6 @@
 # Rehearse Telemetry historical reads in local k3d
 
-This overlay prepares a **synthetic-data-only** k3d rehearsal. It does not create
+This overlay prepares a k3d rehearsal that sends synthetic telemetry samples. It does not create
 an ingress route for Telemetry. Port-forward its ClusterIP Service to loopback
 only when running an authorized HTTP smoke test. The Clinical internal API stays
 on its existing ClusterIP Service; do not route `/api/internal/*` publicly.
@@ -11,9 +11,11 @@ The Telemetry Deployment now declares a single-replica `RollingUpdate` with
 `maxSurge: 1`, `maxUnavailable: 0`, a 45-second termination grace period, and
 Quarkus HTTP graceful-shutdown timeout of 30 seconds. Those bounds cover
 Kubernetes termination and HTTP request draining only; they do **not** prove
-Kafka messaging drain. The renderer and fake-only checks are the only evidence
-from this increment; **no k3d restart, rebalance, canary, persistence, or
-runtime proof is claimed**.
+Kafka messaging drain. The renderer and fake-only checks established the
+rollout configuration. A separately authorized T11-2a run later observed one
+successful local restart/rebalance; it did not run this canary or establish
+persistence idempotency. T11-2b remains offline-prepared until a separate
+`AuthorizedRun` is explicitly approved.
 
 Run the PowerShell 5.1 offline contract checks (default mode performs no
 external command):
@@ -50,21 +52,56 @@ Failed preflight checks report only a fixed stage/code (for example,
 JSON fields, IDs, hosts, and exception text are suppressed. Unknown failures
 use a generic `unknown/operation_failed` diagnostic.
 
-`-Mode AuthorizedCanary` requires `-AuthorizeRollingRestart`,
-`-AuthorizeSyntheticCanary`, and `-ConfirmSyntheticData`, but intentionally
-stops before any command. The existing V1 fixture proves a valid wire shape,
-but direct Kafka publication would bypass Telemetry's Clinical session
-authorization boundary, and this increment does not yet have an approved
-synthetic HTTP identity plus a verified exact-canary Timescale aggregate query.
-Do not work around this by replaying the historical authenticated smoke, using
-real identity, or publishing directly to Kafka. A future canary increment must
-add one-shot state, exact before/after inbox/sample/duplicate/DLQ aggregates,
-consumer group member/offset/lag stabilization, and proof that replaying the
-same batch does not add samples. DLQ inspection must remain aggregate-only.
+The separate `smoke-test-telemetry-canary-k3d.ps1` is the only harness for
+T11-2b. Its default `OfflineTest` performs no external calls. `Preflight` is
+read-only. The only mutating mode is `AuthorizedRun`, and it requires five
+independent switches: `-AuthorizeDoctorPkce`, `-AuthorizePatientPkce`,
+`-AuthorizeClinicalSetup`, `-AuthorizeCanaryWrite`, and `-ConfirmSyntheticData`.
+The existing loopback port-forwards must already serve Clinical at
+`127.0.0.1:18083` and Telemetry at `127.0.0.1:18084`; the harness never creates
+or terminates them.
 
-No command in this section starts k3d, applies manifests, modifies Kafka or a
-database, accesses AWS/Cognito/OIDC, stages changes, or commits. Rollout and
-canary permissions are separate from this offline-prepared code change.
+Run offline checks with Windows PowerShell 5.1:
+
+```powershell
+.\infra\kubernetes\local\telemetry\smoke-test-telemetry-canary-k3d.ps1
+```
+
+`AuthorizedRun` opens separate DOCTOR and PATIENT PKCE sign-ins, creates a
+Clinical plan/configuration/session, and sends the same serialized V1 JSON body
+twice through `POST /api/v1/telemetry/batches` as PATIENT. Telemetry samples,
+stream, batch, and timestamps are synthetic and stay in memory; matching a
+Clinical identity does not prove the pre-existing record is synthetic.
+
+Preflight classifies the clean baseline or the exact existing-plan/session
+baseline as `provenance-required`; the latter is read-only and does not authorize
+writes by itself. After both logins, AuthorizedRun re-reads the Clinical
+baseline immediately before the marker: an initially clean baseline must remain
+exactly clean, while `provenance-required` must remain exact and also pass the
+patient, doctor, assignment, active plan, and active-but-expired session match
+using aggregate-only Clinical SQL. Any baseline change fails before the marker.
+The Clinical setup then creates a new plan/session. Starting it may transition
+that exact matching expired session to a terminal failure state; a current lease
+or any mismatch fails closed before the marker. This validates
+ownership/authorization, not data origin. The canary-specific one-shot marker is
+written before the first Clinical
+mutation; it is separate from and never resets the rolling harness marker. Do
+not retry an ambiguous run or remove the marker as a recovery shortcut.
+
+Before and after ingestion, the harness checks exact-batch inbox/sample counts
+(0/0 then 1/2), the exact source consumer group/topic with stable zero-lag
+snapshots, exactly two attributable source publications/consumptions with
+non-regressing partition offsets, and unchanged DLQ partition offsets. SQL is
+read-only and sent to `psql -f -` over stdin. Output contains only
+aggregate proof fields and fixed stage/code failures; no raw rows, credentials,
+identifiers, payloads, or coordinates are emitted.
+
+Preparing this code does not start k3d, apply manifests, mutate Kafka or a
+database, access AWS/Cognito/OIDC, stage changes, or commit. Rollout and
+canary runtime actions require their own explicit authorization.
+The canary's PKCE/API/Clinical/Kafka/SQL paths are implementation, not evidence
+of a live `AuthorizedRun`; run them only with separate authorization and synthetic
+data.
 
 ## Before deployment
 
