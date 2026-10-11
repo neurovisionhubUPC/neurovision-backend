@@ -2,6 +2,30 @@
 
 Use the root `compose.yaml` to run IAM, Profile, Clinical, Telemetry, three isolated PostgreSQL databases, TimescaleDB, and Kafka without Kubernetes. The existing Kubernetes manifests remain unchanged. This is a **development environment for synthetic data**, not a deployment for real patient data: local Kafka and its payload-bearing DLQ use PLAINTEXT without production access controls or retention.
 
+## Exploratory Telemetry capacity observation
+
+The capacity harness is an intentionally small, sequential synthetic observation through PATIENT-authenticated Telemetry HTTP, Clinical authorization, Kafka, and TimescaleDB. It is not a benchmark, production-capacity result, multi-session test, clinical validation, SLA, or estimate of the vision algorithm's sampling rate. Synthetic sample offsets are fixture-shaped placeholders; the harness measures HTTP submission cadence separately.
+
+Run the offline contract tests first; this is also the default mode and makes no service, OIDC, database, Kafka, file, or marker calls:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\test-telemetry-compose-capacity.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-telemetry-compose-capacity.ps1
+```
+
+An optional `-Mode Preflight` performs read-only loopback readiness, Compose ownership, database aggregate, Kafka-offset, and consumer-lag checks. It does not start or stop services. A real run requires fresh, separate user authorization for every side effect and bounded workload setting:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\infra\docker\smoke-test-telemetry-compose-capacity.ps1 `
+  -Mode AuthorizedRun -AuthorizePatientPkce -AuthorizeClinicalSession `
+  -AuthorizeTelemetryWrite -AuthorizeExpiredSessionTransition -ConfirmSyntheticData `
+  -BatchCount 5 -SamplesPerBatch 10 -BatchIntervalMs 1000
+```
+
+The live flow requires exactly one existing active eligible PATIENT plan, then asks for confirmation before creating a Clinical test session. Clinical may expire an already-expired active session while admitting a new one, so that separate effect has its own mandatory authorization switch. The token stays in process memory; no password, token, code, plan/session/stream ID, payload, coordinate, timestamp, or DLQ body is emitted. Telemetry `202` is only broker acceptance; the harness separately waits for exact run-scoped Timescale counts and verifies accepted/consumer offset deltas, zero stable lag, and no DLQ movement. No session, batch, service, volume, or marker is cleaned up automatically. The one-shot marker in the system temporary directory is retained and blocks another live run until a human deliberately removes it. The bounded defaults are harness choices, not product requirements.
+
+Reported HTTP ACK latency starts immediately before the POST, after request serialization. Persistence and consumer-confirmation durations are monotonic elapsed time since the final HTTP ACK; the preflight DLQ value is a single read-only snapshot, not a stability comparison.
+
 ## Quick path
 
 Run these commands from the repository root.
