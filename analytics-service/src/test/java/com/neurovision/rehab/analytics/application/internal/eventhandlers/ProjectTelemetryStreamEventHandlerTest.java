@@ -21,6 +21,27 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class ProjectTelemetryStreamEventHandlerTest {
+    @Test
+    void observesLoadCalculationAndStoreAtTheirOwnBoundaries() {
+        for (var operation : List.of("STREAM_LOAD", "PROJECTION_CALCULATE", "PROJECTION_STORE")) {
+            var observed = new ArrayList<String>();
+            var failure = new IllegalStateException("synthetic failure");
+            var observer = new com.neurovision.rehab.analytics.application.internal.observability.PersistenceFailureObserver(
+                    (stage, error) -> observed.add(stage.name()));
+            var sourceIdentity = operation.equals("PROJECTION_CALCULATE")
+                    ? new TelemetryStreamIdentity(UUID.randomUUID(), STREAM) : IDENTITY;
+            var stream = new AdmittedTelemetryStream(sourceIdentity, 1,
+                    List.of(admitted(sourceIdentity, 0, TelemetryAdmissionQuality.INITIAL)));
+            AdmittedTelemetryStreamSourcePort source = identity -> operation.equals("STREAM_LOAD")
+                    ? Uni.createFrom().failure(failure) : Uni.createFrom().item(stream);
+            StreamSummaryProjectionPort store = projection -> Uni.createFrom().failure(failure);
+            var error = assertThrows(RuntimeException.class, () -> new ProjectTelemetryStreamEventHandler(source, store, observer)
+                    .project(IDENTITY).await().indefinitely());
+            if (!operation.equals("PROJECTION_CALCULATE")) assertSame(failure, error);
+            assertEquals(List.of(operation), observed);
+        }
+    }
+
     private static final UUID SESSION = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID STREAM = UUID.fromString("22222222-2222-2222-2222-222222222222");
     private static final TelemetryStreamIdentity IDENTITY = new TelemetryStreamIdentity(SESSION, STREAM);

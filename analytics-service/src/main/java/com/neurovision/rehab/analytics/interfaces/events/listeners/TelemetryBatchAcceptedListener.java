@@ -1,6 +1,8 @@
 package com.neurovision.rehab.analytics.interfaces.events.listeners;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.neurovision.rehab.analytics.application.internal.observability.PersistenceFailureObserver;
+import com.neurovision.rehab.analytics.application.ports.out.observability.AnalyticsPersistenceFailurePort.Operation;
 import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitAndProjectTelemetryBatchEventHandler;
 import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitTelemetryBatchEventHandler.Status;
 import com.neurovision.rehab.analytics.application.ports.out.messaging.AnalyticsDeadLetterPort;
@@ -8,6 +10,7 @@ import com.neurovision.rehab.analytics.application.ports.out.messaging.Analytics
 import com.neurovision.rehab.analytics.application.ports.out.messaging.AnalyticsDeadLetterPort.FailureCode;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort.Provenance;
 import com.neurovision.rehab.analytics.interfaces.events.transform.TelemetryBatchAcceptedV1Decoder;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -27,22 +30,25 @@ public class TelemetryBatchAcceptedListener {
     private final AdmitAndProjectTelemetryBatchEventHandler handler;
     private final AnalyticsDeadLetterPort deadLetter;
     private final ObjectMapper mapper;
+    private final MeterRegistry meters;
     private final int maxEventBytes;
     private final int maxSamples;
     private final Duration futureSkew;
     private final int maxRetries;
     private final Duration retryDelay;
     private final Duration persistenceTimeout;
+    private final PersistenceFailureObserver failures;
 
     @Inject
     public TelemetryBatchAcceptedListener(AdmitAndProjectTelemetryBatchEventHandler handler,
-            AnalyticsDeadLetterPort deadLetter, ObjectMapper mapper,
+            AnalyticsDeadLetterPort deadLetter, ObjectMapper mapper, MeterRegistry meters,
             @ConfigProperty(name = "analytics.consumer.max-event-bytes") int maxEventBytes,
             @ConfigProperty(name = "analytics.consumer.max-samples") int maxSamples,
             @ConfigProperty(name = "analytics.consumer.max-future-skew-seconds") long futureSkewSeconds,
             @ConfigProperty(name = "analytics.consumer.max-retries") int maxRetries,
             @ConfigProperty(name = "analytics.consumer.retry-delay-ms") long retryDelayMs,
-            @ConfigProperty(name = "analytics.consumer.persistence-timeout-ms") long persistenceTimeoutMs) {
+            @ConfigProperty(name = "analytics.consumer.persistence-timeout-ms") long persistenceTimeoutMs,
+            PersistenceFailureObserver failures) {
         if (maxRetries < 0 || maxRetries > 3 || retryDelayMs < 1 || retryDelayMs > 1000
                 || persistenceTimeoutMs < 100 || persistenceTimeoutMs > 10_000) {
             throw new IllegalArgumentException("Invalid analytics consumer bounds");
@@ -50,12 +56,22 @@ public class TelemetryBatchAcceptedListener {
         this.handler = handler;
         this.deadLetter = deadLetter;
         this.mapper = mapper;
+        this.meters = meters;
         this.maxEventBytes = maxEventBytes;
         this.maxSamples = maxSamples;
         this.futureSkew = Duration.ofSeconds(futureSkewSeconds);
         this.maxRetries = maxRetries;
         this.retryDelay = Duration.ofMillis(retryDelayMs);
         this.persistenceTimeout = Duration.ofMillis(persistenceTimeoutMs);
+        this.failures = failures;
+    }
+
+    public TelemetryBatchAcceptedListener(AdmitAndProjectTelemetryBatchEventHandler handler,
+            AnalyticsDeadLetterPort deadLetter, ObjectMapper mapper, MeterRegistry meters,
+            int maxEventBytes, int maxSamples, long futureSkewSeconds, int maxRetries,
+            long retryDelayMs, long persistenceTimeoutMs) {
+        this(handler, deadLetter, mapper, meters, maxEventBytes, maxSamples, futureSkewSeconds,
+                maxRetries, retryDelayMs, persistenceTimeoutMs, PersistenceFailureObserver.NOOP);
     }
 
     @Incoming("analytics-telemetry")
@@ -87,6 +103,7 @@ public class TelemetryBatchAcceptedListener {
                     .subscribeAsCompletionStage()
                     .handle((result, failure) -> {
                         if (failure != null) {
+                            failures.record(Operation.PIPELINE, failure);
                             return quarantine(key, message, FailureCode.PERSISTENCE_RETRIES_EXHAUSTED,
                                     topic, partition, offset);
                         }
@@ -106,9 +123,17 @@ public class TelemetryBatchAcceptedListener {
     private CompletionStage<Void> quarantine(String key, Message<String> message, FailureCode code,
             String topic, int partition, long offset) {
         return deadLetter.quarantine(new FailedRecord(key, message.getPayload(), code, topic, partition, offset))
-                .handle((ignored, failure) -> failure == null
-                        ? message.ack()
-                        : message.nack(new IllegalStateException("Analytics DLQ unavailable")))
+                .handle((ignored, failure) -> {
+                    try {
+                        meters.counter("analytics.dlq.publications", "outcome",
+                                failure == null ? "success" : "failure").increment();
+                    } catch (RuntimeException metricUnavailable) {
+                        // Observability must not change publication acknowledgement or redelivery.
+                    }
+                    return failure == null
+                            ? message.ack()
+                            : message.nack(new IllegalStateException("Analytics DLQ unavailable"));
+                })
                 .thenCompose(Function.identity());
     }
 }
