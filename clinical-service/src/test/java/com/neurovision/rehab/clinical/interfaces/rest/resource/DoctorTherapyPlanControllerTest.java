@@ -23,7 +23,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 @QuarkusTest
+@io.quarkus.test.junit.TestProfile(DoctorTherapyPlanControllerTest.EligibleProfile.class)
 class DoctorTherapyPlanControllerTest {
+    // This DB/API suite isolates assignment/configuration behavior. Eligibility itself has
+    // fake-only adapter/gate tests; no Profile network dependency is introduced here.
+    public static class EligibleProfile implements io.quarkus.test.junit.QuarkusTestProfile {
+        @Override public java.util.Set<Class<?>> getEnabledAlternatives() { return java.util.Set.of(EligibleDoctor.class); }
+    }
+    @jakarta.enterprise.inject.Alternative
+    @jakarta.enterprise.context.ApplicationScoped
+    public static class EligibleDoctor implements com.neurovision.rehab.clinical.application.ports.out.authorization.DoctorSchedulingEligibilityPort {
+        @Override public void requireEligible(CognitoSubject doctor) { java.util.Objects.requireNonNull(doctor); }
+    }
+
     private static final String DOCTOR = "doctor-plan-api-test";
     private static final String PATIENT = "patient-plan-api-test";
     private static final ClinicalPatientId PATIENT_ID = new ClinicalPatientId(UUID.randomUUID());

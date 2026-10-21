@@ -22,6 +22,17 @@ class CompleteCurrentProfileCommandServiceTest {
     private static final Instant COMPLETED_AT = Instant.parse("2026-08-10T21:05:30Z");
 
     @Test
+    void shouldCompleteExistingPatientWithNamesOnlyAndAllowLaterDetails() {
+        var repository = new SingleProfileRepository(pendingProfile());
+        var service = new CompleteCurrentProfileCommandService(repository, Clock.fixed(COMPLETED_AT, ZoneOffset.UTC));
+        var result = service.handle(new CompleteCurrentProfileCommand("patient-cognito-sub", "Andrea", "Salazar", null, null, null));
+        assertEquals(ProfileStatus.ACTIVE, result.status());
+        org.junit.jupiter.api.Assertions.assertNull(result.personalDetails().orElseThrow().documentNumber());
+        service.handle(command("patient-cognito-sub"));
+        assertEquals("74859621", repository.profile.personalDetails().orElseThrow().documentNumber());
+    }
+
+    @Test
     void shouldCompleteTheProfileBelongingToTheAuthenticatedSubject() {
         var repository = new SingleProfileRepository(pendingProfile());
         var service = new CompleteCurrentProfileCommandService(

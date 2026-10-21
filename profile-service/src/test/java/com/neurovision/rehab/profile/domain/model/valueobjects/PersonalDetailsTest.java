@@ -10,6 +10,16 @@ import org.junit.jupiter.api.Test;
 class PersonalDetailsTest {
 
     @Test
+    void shouldAllowNamesOnlyButStillRequireBothNames() {
+        var details = new PersonalDetails("Andrea", "Salazar", null, null, null);
+        org.junit.jupiter.api.Assertions.assertNull(details.documentNumber());
+        org.junit.jupiter.api.Assertions.assertNull(details.birthDate());
+        org.junit.jupiter.api.Assertions.assertNull(details.phone());
+        assertThrows(IllegalArgumentException.class, () -> new PersonalDetails(null, "Salazar", null, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new PersonalDetails("Andrea", " ", null, null, null));
+    }
+
+    @Test
     void shouldNormalizePersonalDetails() {
         var details = new PersonalDetails(
                 "  Andrea ", " Salazar  ", " 74859621 ", LocalDate.of(1998, 4, 12), " +51 987 654 321 ");

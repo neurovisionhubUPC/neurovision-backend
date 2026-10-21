@@ -23,10 +23,10 @@ public class DoctorProfileEntity {
     @Column(name = "profile_id", nullable = false, unique = true, updatable = false)
     private UUID profileId;
 
-    @Column(name = "specialty", nullable = false, length = 100)
+    @Column(name = "specialty", length = 100)
     private String specialty;
 
-    @Column(name = "medical_license", nullable = false, unique = true, length = 64)
+    @Column(name = "medical_license", unique = true, length = 64)
     private String medicalLicense;
 
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -66,7 +66,7 @@ public class DoctorProfileEntity {
         return DoctorProfile.rehydrate(
                 new DoctorProfileId(id),
                 new ProfileId(profileId),
-                new ProfessionalDetails(specialty, medicalLicense),
+                ProfessionalDetails.fromStored(specialty, medicalLicense),
                 createdAt,
                 updatedAt);
     }

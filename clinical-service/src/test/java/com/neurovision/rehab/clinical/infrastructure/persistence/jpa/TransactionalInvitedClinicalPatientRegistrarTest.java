@@ -59,7 +59,7 @@ class TransactionalInvitedClinicalPatientRegistrarTest {
         var patient = clinicalPatients
                 .findByPatientSubject(new CognitoSubject(PATIENT_SUBJECT))
                 .orElseThrow();
-        assertEquals(ClinicalPatientStatus.PENDING_ASSESSMENT, patient.status());
+        assertEquals(ClinicalPatientStatus.ACTIVE, patient.status());
         assertTrue(patient.strokeDiagnosis().isEmpty());
         assertTrue(patient.sequelae().isEmpty());
         assertEquals(OCCURRED_AT, patient.createdAt());

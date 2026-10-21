@@ -12,6 +12,7 @@ import com.neurovision.rehab.clinical.application.ports.out.persistence.Processe
 import com.neurovision.rehab.clinical.domain.model.aggregates.ClinicalPatient;
 import com.neurovision.rehab.clinical.domain.model.aggregates.DoctorPatientAssignment;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.ClinicalPatientId;
+import com.neurovision.rehab.clinical.domain.model.valueobjects.ClinicalPatientStatus;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.CognitoSubject;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.DoctorPatientAssignmentId;
 import java.time.Clock;
@@ -64,6 +65,7 @@ class RegisterInvitedClinicalPatientCommandServiceTest {
         var patient = patientRepository.findByPatientSubject(new CognitoSubject(PATIENT_SUBJECT))
                 .orElseThrow();
         assertEquals(new ClinicalPatientId(PATIENT_ID), patient.id());
+        assertEquals(ClinicalPatientStatus.ACTIVE, patient.status());
         assertEquals(OCCURRED_AT, patient.createdAt());
 
         var assignment = assignmentRepository

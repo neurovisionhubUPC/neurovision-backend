@@ -45,7 +45,7 @@ class AppendTherapeuticConfigurationCommandServiceTest {
                     @Override public void save(TherapyPlan ignored) {}
                 }, assignments,
                 configurations, UUID::randomUUID,
-                Clock.fixed(now, ZoneOffset.UTC));
+                Clock.fixed(now, ZoneOffset.UTC), subject -> {});
     }
 
     @Test

@@ -24,6 +24,7 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import java.time.Clock;
+import com.neurovision.rehab.clinical.application.ports.out.authorization.DoctorSchedulingEligibilityPort;
 import java.time.Duration;
 import java.util.UUID;
 
@@ -107,19 +108,20 @@ public class ApplicationServicesConfiguration {
     AppendTherapeuticConfigurationCommandService appendTherapeuticConfigurationCommandService(
             TherapyPlanRepository therapyPlanRepository,
             DoctorPatientAssignmentRepository assignmentRepository,
-            TherapeuticExerciseConfigurationRepository configurationRepository) {
+            TherapeuticExerciseConfigurationRepository configurationRepository,
+            DoctorSchedulingEligibilityPort eligibility) {
         return new AppendTherapeuticConfigurationCommandService(
                 therapyPlanRepository, assignmentRepository, configurationRepository,
-                UUID::randomUUID, Clock.systemUTC());
+                UUID::randomUUID, Clock.systemUTC(), eligibility);
     }
 
     @Produces
     @ApplicationScoped
     CreateTherapyPlanCommandService createTherapyPlanCommandService(
             DoctorPatientAssignmentRepository assignmentRepository,
-            TherapyPlanRepository therapyPlanRepository) {
+            TherapyPlanRepository therapyPlanRepository, DoctorSchedulingEligibilityPort eligibility) {
         return new CreateTherapyPlanCommandService(
-                assignmentRepository, therapyPlanRepository, UUID::randomUUID);
+                assignmentRepository, therapyPlanRepository, UUID::randomUUID, eligibility);
     }
 
     @Produces

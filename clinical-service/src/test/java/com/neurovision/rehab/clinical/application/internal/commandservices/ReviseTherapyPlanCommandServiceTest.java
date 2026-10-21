@@ -195,7 +195,7 @@ class ReviseTherapyPlanCommandServiceTest {
 
     @Test
     void assignedDoctorCanCreatePlanAndPatientOrUnassignedIdentityCannot() {
-        var creator = new CreateTherapyPlanCommandService(assignments, new FakePlans(null), UUID::randomUUID);
+        var creator = new CreateTherapyPlanCommandService(assignments, new FakePlans(null), UUID::randomUUID, subject -> {});
         var command = new CreateTherapyPlanCommand(patientId, doctor, 3, 30, 60,
                 5, 15, 50, Map.of(new ExerciseCode("fixation"), 3));
         assertEquals(TherapyPlanStatus.ACTIVE, creator.handle(command).status());

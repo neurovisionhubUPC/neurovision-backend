@@ -1,5 +1,6 @@
 package com.neurovision.rehab.profile.interfaces.rest.resource;
 
+import com.neurovision.rehab.profile.application.internal.queryservices.CurrentProfile;
 import com.neurovision.rehab.profile.infrastructure.persistence.jpa.transaction.TransactionalCurrentProfileService;
 import com.neurovision.rehab.profile.interfaces.rest.transform.ProfileRestAssembler;
 import io.quarkus.security.identity.SecurityIdentity;
@@ -7,6 +8,7 @@ import jakarta.annotation.security.RolesAllowed;
 import jakarta.enterprise.context.RequestScoped;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.PUT;
@@ -119,7 +121,13 @@ public class ProfileController {
     })
     public ProfileResponse onboardDoctor(@NotNull @Valid OnboardDoctorRequest request) {
         var command = ProfileRestAssembler.toCommand(request, authenticatedSubject());
-        return ProfileRestAssembler.toResponse(profiles.onboardDoctor(command));
+        CurrentProfile profile;
+        try {
+            profile = profiles.onboardDoctor(command);
+        } catch (IllegalArgumentException invalid) {
+            throw new BadRequestException("Invalid doctor profile request");
+        }
+        return ProfileRestAssembler.toResponse(profile);
     }
 
     private String authenticatedSubject() {

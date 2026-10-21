@@ -138,7 +138,7 @@ class ProfileControllerTest {
     void shouldOnboardTheAuthenticatedDoctorAndExposeProfessionalDetails() {
         given()
                 .contentType(JSON)
-                .body(validDoctorRequest("44556677", "CMP-123456"))
+                .body(validDoctorRequest("44556677", "123456"))
                 .when()
                 .put(ENDPOINT + "/professional")
                 .then()
@@ -146,7 +146,7 @@ class ProfileControllerTest {
                 .body("profileType", equalTo("DOCTOR"))
                 .body("status", equalTo("ACTIVE"))
                 .body("specialty", equalTo("Neurology"))
-                .body("medicalLicense", equalTo("CMP-123456"));
+                .body("medicalLicense", equalTo("123456"));
 
         given()
                 .when()
@@ -154,17 +154,17 @@ class ProfileControllerTest {
                 .then()
                 .statusCode(200)
                 .body("specialty", equalTo("Neurology"))
-                .body("medicalLicense", equalTo("CMP-123456"));
+                .body("medicalLicense", equalTo("123456"));
     }
 
     @Test
     @TestSecurity(user = "doctor", roles = "DOCTOR")
     @OidcSecurity(claims = @Claim(key = "sub", value = DOCTOR_SUBJECT))
     void shouldKeepRepeatedDoctorOnboardingIdempotent() {
-        given().contentType(JSON).body(validDoctorRequest("44556677", "CMP-123456"))
+        given().contentType(JSON).body(validDoctorRequest("44556677", "123456"))
                 .when().put(ENDPOINT + "/professional").then().statusCode(200);
 
-        given().contentType(JSON).body(validDoctorRequest("44556677", "CMP-123456"))
+        given().contentType(JSON).body(validDoctorRequest("44556677", "123456"))
                 .when().put(ENDPOINT + "/professional").then().statusCode(200);
 
         QuarkusTransaction.requiringNew().run(() -> {
@@ -182,7 +182,7 @@ class ProfileControllerTest {
     void shouldRejectPatientsUsingTheDoctorOnboardingContract() {
         given()
                 .contentType(JSON)
-                .body(validDoctorRequest("44556677", "CMP-123456"))
+                .body(validDoctorRequest("44556677", "123456"))
                 .when()
                 .put(ENDPOINT + "/professional")
                 .then()
@@ -204,7 +204,7 @@ class ProfileControllerTest {
 
         given()
                 .contentType(JSON)
-                .body(validDoctorRequest("44556677", "CMP-123456"))
+                .body(validDoctorRequest("44556677", "123456"))
                 .when()
                 .put(ENDPOINT + "/professional")
                 .then()
@@ -224,11 +224,11 @@ class ProfileControllerTest {
                 LocalDate.of(1980, 1, 5),
                 "+51 999 111 222",
                 "Physical Medicine",
-                "CMP-123456"));
+                "123456"));
 
         given()
                 .contentType(JSON)
-                .body(validDoctorRequest("44556677", "CMP-123456"))
+                .body(validDoctorRequest("44556677", "123456"))
                 .when()
                 .put(ENDPOINT + "/professional")
                 .then()

@@ -2,7 +2,6 @@ package com.neurovision.rehab.profile.domain.model.valueobjects;
 
 import java.time.LocalDate;
 import java.time.ZoneOffset;
-import java.util.Objects;
 
 public record PersonalDetails(
         String firstName,
@@ -14,12 +13,11 @@ public record PersonalDetails(
     public PersonalDetails {
         firstName = requireText(firstName, "First name", 1, 100);
         lastName = requireText(lastName, "Last name", 1, 100);
-        documentNumber = requireText(documentNumber, "Document number", 3, 32);
-        Objects.requireNonNull(birthDate, "Birth date must not be null");
-        if (birthDate.isAfter(LocalDate.now(ZoneOffset.UTC))) {
+        documentNumber = documentNumber == null ? null : requireText(documentNumber, "Document number", 3, 32);
+        if (birthDate != null && birthDate.isAfter(LocalDate.now(ZoneOffset.UTC))) {
             throw new IllegalArgumentException("Birth date must not be in the future");
         }
-        phone = requireText(phone, "Phone", 7, 20);
+        phone = phone == null ? null : requireText(phone, "Phone", 7, 20);
     }
 
     private static String requireText(String value, String field, int min, int max) {

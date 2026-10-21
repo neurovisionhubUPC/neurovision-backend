@@ -6,6 +6,7 @@ import com.neurovision.rehab.clinical.domain.model.valueobjects.ClinicalPatientS
 import com.neurovision.rehab.clinical.domain.model.valueobjects.CognitoSubject;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.Sequela;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.StrokeDiagnosis;
+import com.neurovision.rehab.clinical.domain.model.valueobjects.RehabilitationContext;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -40,6 +41,12 @@ public class ClinicalPatientEntity {
     @Column(name = "sequelae", nullable = false, columnDefinition = "text[]")
     private String[] sequelae;
 
+    @Column(name = "affected_hemifield", length = 5)
+    private String affectedHemifield;
+
+    @Column(name = "rehabilitation_observations", length = 2000)
+    private String rehabilitationObservations;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -51,6 +58,31 @@ public class ClinicalPatientEntity {
     private long version;
 
     protected ClinicalPatientEntity() {}
+
+    public long version() { return version; }
+
+    public RehabilitationContext rehabilitationContext() {
+        return RehabilitationContext.rehydrate(
+                affectedHemifield == null ? null : RehabilitationContext.Hemifield.valueOf(affectedHemifield),
+                strokeDiagnosis, sequelae == null ? java.util.List.of() : Arrays.asList(sequelae.clone()),
+                rehabilitationObservations);
+    }
+
+    public boolean replaceRehabilitationContext(RehabilitationContext context, Instant changedAt) {
+        java.util.Objects.requireNonNull(context);
+        java.util.Objects.requireNonNull(changedAt);
+        if (!ClinicalPatientStatus.ACTIVE.name().equals(status)) {
+            throw new IllegalStateException("Legacy pending registration requires migration before editing");
+        }
+        if (changedAt.isBefore(updatedAt)) throw new IllegalArgumentException("Update time must not move backwards");
+        if (rehabilitationContext().equals(context)) return false;
+        affectedHemifield = context.affectedHemifield() == null ? null : context.affectedHemifield().name();
+        strokeDiagnosis = context.previousDiagnosis();
+        sequelae = context.sequelae().toArray(String[]::new);
+        rehabilitationObservations = context.observations();
+        updatedAt = changedAt;
+        return true;
+    }
 
     public static ClinicalPatientEntity fromDomain(ClinicalPatient patient) {
         var entity = new ClinicalPatientEntity();

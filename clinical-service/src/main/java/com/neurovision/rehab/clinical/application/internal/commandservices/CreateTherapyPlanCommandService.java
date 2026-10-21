@@ -1,6 +1,7 @@
 package com.neurovision.rehab.clinical.application.internal.commandservices;
 
 import com.neurovision.rehab.clinical.application.ports.out.persistence.*;
+import com.neurovision.rehab.clinical.application.ports.out.authorization.DoctorSchedulingEligibilityPort;
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapyPlan;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
 import java.util.Objects;
@@ -10,18 +11,21 @@ import java.util.function.Supplier;
 public class CreateTherapyPlanCommandService {
     private final DoctorPatientAssignmentRepository assignments;
     private final TherapyPlanRepository plans;
+    private final DoctorSchedulingEligibilityPort eligibility;
     private final Supplier<UUID> identifiers;
 
     public CreateTherapyPlanCommandService(
             DoctorPatientAssignmentRepository assignments, TherapyPlanRepository plans,
-            Supplier<UUID> identifiers) {
+            Supplier<UUID> identifiers, DoctorSchedulingEligibilityPort eligibility) {
         this.assignments = Objects.requireNonNull(assignments);
         this.plans = Objects.requireNonNull(plans);
         this.identifiers = Objects.requireNonNull(identifiers);
+        this.eligibility = Objects.requireNonNull(eligibility);
     }
 
     public TherapyPlan handle(CreateTherapyPlanCommand command) {
         Objects.requireNonNull(command);
+        eligibility.requireEligible(command.doctorSubject());
         assignments.findActiveByClinicalPatientIdAndDoctorSubjectForUpdate(
                         command.clinicalPatientId(), command.doctorSubject())
                 .orElseThrow(() -> new SecurityException("Active doctor-patient assignment is required"));

@@ -47,17 +47,16 @@ public final class OnboardDoctorCommandService {
             throw new ProfileTypeConflictException();
         }
 
-        userProfile.complete(
-                new PersonalDetails(
+        var personalDetails = new PersonalDetails(
                         command.firstName(),
                         command.lastName(),
                         command.documentNumber(),
                         command.birthDate(),
-                        command.phone()),
-                now);
+                        command.phone());
 
         var professionalDetails =
                 new ProfessionalDetails(command.specialty(), command.medicalLicense());
+        userProfile.complete(personalDetails, now);
         var doctorProfile = doctorProfiles.findByProfileId(userProfile.id())
                 .orElseGet(() -> DoctorProfile.create(
                         new DoctorProfileId(doctorProfileIdGenerator.get()),

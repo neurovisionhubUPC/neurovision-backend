@@ -25,7 +25,7 @@ class DoctorProfileTest {
 
         assertEquals(PROFILE_ID, profile.profileId());
         assertEquals("Neurology", profile.professionalDetails().specialty());
-        assertEquals("CMP-123456", profile.professionalDetails().medicalLicense());
+        assertEquals("123456", profile.professionalDetails().medicalLicense());
         assertEquals(CREATED_AT, profile.updatedAt());
     }
 
@@ -43,7 +43,7 @@ class DoctorProfileTest {
     void shouldRejectInvalidProfessionalDetails() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new ProfessionalDetails(" ", "CMP-123456"));
+                () -> new ProfessionalDetails(" ", "123456"));
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new ProfessionalDetails("Neurology", " "));
@@ -51,12 +51,12 @@ class DoctorProfileTest {
 
     @Test
     void shouldNormalizeMedicalLicensesForConsistentUniqueness() {
-        var details = new ProfessionalDetails("Neurology", "cmp-123456");
+        var details = new ProfessionalDetails("Neurology", " 123456 ");
 
-        assertEquals("CMP-123456", details.medicalLicense());
+        assertEquals("123456", details.medicalLicense());
     }
 
     private static ProfessionalDetails details() {
-        return new ProfessionalDetails("Neurology", "CMP-123456");
+        return new ProfessionalDetails("Neurology", "123456");
     }
 }

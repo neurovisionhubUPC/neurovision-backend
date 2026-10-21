@@ -1,6 +1,7 @@
 package com.neurovision.rehab.clinical.application.internal.commandservices;
 
 import com.neurovision.rehab.clinical.application.ports.out.persistence.*;
+import com.neurovision.rehab.clinical.application.ports.out.authorization.DoctorSchedulingEligibilityPort;
 import com.neurovision.rehab.clinical.domain.model.aggregates.TherapeuticExerciseConfiguration;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
 import java.time.Clock;
@@ -13,6 +14,7 @@ public class AppendTherapeuticConfigurationCommandService {
     private final TherapyPlanRepository plans;
     private final DoctorPatientAssignmentRepository assignments;
     private final TherapeuticExerciseConfigurationRepository configurations;
+    private final DoctorSchedulingEligibilityPort eligibility;
     private final Supplier<UUID> identifiers;
     private final Clock clock;
 
@@ -21,11 +23,12 @@ public class AppendTherapeuticConfigurationCommandService {
             DoctorPatientAssignmentRepository assignments,
             TherapeuticExerciseConfigurationRepository configurations,
             Supplier<UUID> identifiers,
-            Clock clock) {
+            Clock clock, DoctorSchedulingEligibilityPort eligibility) {
         this.plans = Objects.requireNonNull(plans);
         this.assignments = Objects.requireNonNull(assignments);
         this.configurations = Objects.requireNonNull(configurations);
         this.identifiers = Objects.requireNonNull(identifiers);
+        this.eligibility = Objects.requireNonNull(eligibility);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -35,6 +38,7 @@ public class AppendTherapeuticConfigurationCommandService {
      */
     public TherapeuticExerciseConfiguration handle(AppendTherapeuticConfigurationCommand command) {
         Objects.requireNonNull(command, "Command must not be null");
+        eligibility.requireEligible(command.doctorSubject());
         // Lock order is stable: plan first, then assignment. The plan lock also serializes
         // max(version)+1 allocation for every exercise in this plan.
         var plan = plans.findByIdForUpdate(command.therapyPlanId())

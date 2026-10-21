@@ -1,6 +1,7 @@
 package com.neurovision.rehab.clinical.interfaces.rest.resource;
 
 import com.neurovision.rehab.clinical.domain.model.valueobjects.CognitoSubject;
+import com.neurovision.rehab.clinical.application.internal.commandservices.DoctorSchedulingUnavailableException;
 import com.neurovision.rehab.clinical.application.ports.in.TherapeuticConfigurationAppendUseCase;
 import com.neurovision.rehab.clinical.application.ports.in.TherapyPlanCreationUseCase;
 import com.neurovision.rehab.clinical.interfaces.rest.transform.TherapyPlanRestAssembler;
@@ -48,7 +49,8 @@ public class DoctorTherapyPlanController {
         @APIResponse(responseCode = "201", description = "Plan created"),
         @APIResponse(responseCode = "400", description = "Invalid prescription"),
         @APIResponse(responseCode = "401", description = "Missing or invalid access token"),
-        @APIResponse(responseCode = "403", description = "Doctor is not permitted to create this plan")
+        @APIResponse(responseCode = "403", description = "Assignment and active doctor Profile with valid CMP are required"),
+        @APIResponse(responseCode = "503", description = "Profile eligibility is unavailable")
     })
     public RestResponse<TherapyPlanResponse> create(@PathParam("clinicalPatientId") String rawPatientId,
             CreateTherapyPlanRequest request) {
@@ -57,6 +59,8 @@ public class DoctorTherapyPlanController {
             var command = TherapyPlanRestAssembler.toCommand(UUID.fromString(rawPatientId), doctor, request);
             return RestResponse.status(Response.Status.CREATED,
                     TherapyPlanRestAssembler.toResponse(creator.handle(command)));
+        } catch (DoctorSchedulingUnavailableException unavailable) {
+            throw new WebApplicationException("Doctor scheduling eligibility is unavailable", 503);
         } catch (SecurityException | NoSuchElementException denied) {
             throw new ForbiddenException("Therapy operation is not permitted");
         } catch (IllegalArgumentException | NullPointerException invalid) {
@@ -73,7 +77,8 @@ public class DoctorTherapyPlanController {
         @APIResponse(responseCode = "400", description = "Invalid configuration"),
         @APIResponse(responseCode = "401", description = "Missing or invalid access token"),
         @APIResponse(responseCode = "403", description = "Plan is unknown or not accessible"),
-        @APIResponse(responseCode = "409", description = "Plan is not active or exercise is not prescribed")
+        @APIResponse(responseCode = "409", description = "Plan is not active or exercise is not prescribed"),
+        @APIResponse(responseCode = "503", description = "Profile eligibility is unavailable")
     })
     public RestResponse<TherapeuticConfigurationResponse> append(
             @PathParam("clinicalPatientId") String rawPatientId,
@@ -85,6 +90,8 @@ public class DoctorTherapyPlanController {
                     UUID.fromString(rawPlanId), doctor, request);
             return RestResponse.status(Response.Status.CREATED,
                     TherapyPlanRestAssembler.toResponse(appender.handle(command)));
+        } catch (DoctorSchedulingUnavailableException unavailable) {
+            throw new WebApplicationException("Doctor scheduling eligibility is unavailable", 503);
         } catch (SecurityException | NoSuchElementException denied) {
             throw new ForbiddenException("Therapy operation is not permitted");
         } catch (IllegalStateException conflict) {

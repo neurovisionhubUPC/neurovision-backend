@@ -28,6 +28,33 @@ class OnboardDoctorCommandServiceTest {
             UUID.fromString("157816c1-4640-42df-aa63-68c1c29dbf80");
 
     @Test
+    void shouldCompleteNamesOnlyWithoutProfessionalEligibility() {
+        var users = new InMemoryUserProfileRepository();
+        var doctors = new InMemoryDoctorProfileRepository();
+        var result = service(users, doctors).handle(new OnboardDoctorCommand(
+                "doctor-sub", "Marco", "Bill", null, null, null, null, null));
+        assertEquals(ProfileStatus.ACTIVE, result.userProfile().status());
+        org.junit.jupiter.api.Assertions.assertNull(result.doctorProfile().professionalDetails().medicalLicense());
+        org.junit.jupiter.api.Assertions.assertNull(result.userProfile().personalDetails().orElseThrow().phone());
+        var again = service(users, doctors).handle(new OnboardDoctorCommand(
+                "doctor-sub", "Marco", "Bill", null, null, null, null, null));
+        assertEquals(result.doctorProfile().id(), again.doctorProfile().id());
+    }
+
+    @Test
+    void invalidCmpDoesNotMutateAnExistingProfileOrSaveChanges() {
+        var users = new InMemoryUserProfileRepository();
+        var doctors = new InMemoryDoctorProfileRepository();
+        var service = service(users, doctors);
+        service.handle(command("doctor-sub"));
+        var before = users.profile.personalDetails();
+        assertThrows(IllegalArgumentException.class, () -> service.handle(new OnboardDoctorCommand(
+                "doctor-sub", "Changed", "Name", null, null, null, null, "CMP-123456")));
+        assertEquals(before, users.profile.personalDetails());
+        assertEquals("123456", doctors.profile.professionalDetails().medicalLicense());
+    }
+
+    @Test
     void shouldCreateAndCompleteTheDoctorProfileForANewSubject() {
         var users = new InMemoryUserProfileRepository();
         var doctors = new InMemoryDoctorProfileRepository();
@@ -86,7 +113,7 @@ class OnboardDoctorCommandServiceTest {
                 LocalDate.of(1985, 6, 15),
                 "+51 987 654 321",
                 "Neurology",
-                "CMP-123456");
+                "123456");
     }
 
     private static final class InMemoryUserProfileRepository implements UserProfileRepository {

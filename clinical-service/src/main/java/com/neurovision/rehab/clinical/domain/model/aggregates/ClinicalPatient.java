@@ -47,7 +47,7 @@ public final class ClinicalPatient {
         return new ClinicalPatient(
                 id,
                 patientSubject,
-                ClinicalPatientStatus.PENDING_ASSESSMENT,
+                ClinicalPatientStatus.ACTIVE,
                 null,
                 Set.of(),
                 registeredAt,
@@ -74,6 +74,9 @@ public final class ClinicalPatient {
         if (assessedAt.isBefore(updatedAt)) {
             throw new IllegalArgumentException("Assessment time must not precede the last update");
         }
+        if (status != ClinicalPatientStatus.ACTIVE) {
+            throw new IllegalStateException("Legacy pending registration requires migration before editing");
+        }
         if (status == ClinicalPatientStatus.ACTIVE
                 && diagnosis.equals(strokeDiagnosis)
                 && normalizedSequelae.equals(this.sequelae)) {
@@ -82,7 +85,6 @@ public final class ClinicalPatient {
 
         strokeDiagnosis = diagnosis;
         this.sequelae = normalizedSequelae;
-        status = ClinicalPatientStatus.ACTIVE;
         updatedAt = assessedAt;
     }
 
@@ -99,9 +101,6 @@ public final class ClinicalPatient {
                 && (strokeDiagnosis != null || !sequelae.isEmpty())) {
             throw new IllegalArgumentException(
                     "Pending clinical patient must not contain assessment data");
-        }
-        if (status == ClinicalPatientStatus.ACTIVE && strokeDiagnosis == null) {
-            throw new IllegalArgumentException("Active clinical patient requires a stroke diagnosis");
         }
     }
 

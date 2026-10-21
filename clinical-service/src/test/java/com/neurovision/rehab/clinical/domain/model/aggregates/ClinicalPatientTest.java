@@ -23,12 +23,12 @@ class ClinicalPatientTest {
     private static final Instant REGISTERED_AT = Instant.parse("2026-08-11T05:00:00Z");
 
     @Test
-    void shouldRegisterAnInvitedPatientPendingClinicalAssessment() {
+    void shouldRegisterAnInvitedPatientActiveWithoutAssessment() {
         var patient = ClinicalPatient.registerInvited(PATIENT_ID, PATIENT_SUBJECT, REGISTERED_AT);
 
         assertEquals(PATIENT_ID, patient.id());
         assertEquals(PATIENT_SUBJECT, patient.patientSubject());
-        assertEquals(ClinicalPatientStatus.PENDING_ASSESSMENT, patient.status());
+        assertEquals(ClinicalPatientStatus.ACTIVE, patient.status());
         assertTrue(patient.strokeDiagnosis().isEmpty());
         assertTrue(patient.sequelae().isEmpty());
         assertEquals(REGISTERED_AT, patient.createdAt());
@@ -113,16 +113,6 @@ class ClinicalPatientTest {
                         Set.of(),
                         REGISTERED_AT,
                         REGISTERED_AT));
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> ClinicalPatient.rehydrate(
-                        PATIENT_ID,
-                        PATIENT_SUBJECT,
-                        ClinicalPatientStatus.ACTIVE,
-                        null,
-                        Set.of(),
-                        REGISTERED_AT,
-                        REGISTERED_AT));
     }
 
     @Test
@@ -137,5 +127,37 @@ class ClinicalPatientTest {
                         Set.of(),
                         REGISTERED_AT,
                         REGISTERED_AT.minusSeconds(1)));
+    }
+
+    @Test
+    void shouldRehydrateActiveWithoutInventingClinicalData() {
+        var updatedAt = REGISTERED_AT.plusSeconds(30);
+        var patient = ClinicalPatient.rehydrate(PATIENT_ID, PATIENT_SUBJECT,
+                ClinicalPatientStatus.ACTIVE, null, Set.of(), REGISTERED_AT, updatedAt);
+        assertEquals(ClinicalPatientStatus.ACTIVE, patient.status());
+        assertEquals(PATIENT_ID, patient.id());
+        assertEquals(PATIENT_SUBJECT, patient.patientSubject());
+        assertTrue(patient.strokeDiagnosis().isEmpty());
+        assertTrue(patient.sequelae().isEmpty());
+        assertEquals(REGISTERED_AT, patient.createdAt());
+        assertEquals(updatedAt, patient.updatedAt());
+    }
+
+    @Test
+    void shouldReadLegacyPendingWithoutActivatingIt() {
+        var patient = ClinicalPatient.rehydrate(PATIENT_ID, PATIENT_SUBJECT,
+                ClinicalPatientStatus.PENDING_ASSESSMENT, null, Set.of(),
+                REGISTERED_AT, REGISTERED_AT);
+        assertEquals(ClinicalPatientStatus.PENDING_ASSESSMENT, patient.status());
+        assertTrue(patient.strokeDiagnosis().isEmpty());
+        assertTrue(patient.sequelae().isEmpty());
+        assertEquals(REGISTERED_AT, patient.updatedAt());
+        assertThrows(IllegalStateException.class, () -> patient.recordAssessment(
+                new StrokeDiagnosis("Previously established diagnosis"), Set.of(),
+                REGISTERED_AT.plusSeconds(1)));
+        assertEquals(ClinicalPatientStatus.PENDING_ASSESSMENT, patient.status());
+        assertTrue(patient.strokeDiagnosis().isEmpty());
+        assertTrue(patient.sequelae().isEmpty());
+        assertEquals(REGISTERED_AT, patient.updatedAt());
     }
 }
