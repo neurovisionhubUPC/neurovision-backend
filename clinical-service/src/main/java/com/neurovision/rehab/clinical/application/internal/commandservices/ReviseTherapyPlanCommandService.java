@@ -36,7 +36,7 @@ public class ReviseTherapyPlanCommandService {
 
         // Shared lock discipline for existing plans: plan -> assignment -> active session.
         var base = plans.findByIdForUpdate(command.therapyPlanId())
-                .orElseThrow(() -> new IllegalArgumentException("Therapy plan does not exist"));
+                .orElseThrow(() -> new NoSuchElementException("Therapy plan is not accessible"));
         if (!base.clinicalPatientId().equals(command.clinicalPatientId())
                 || !base.doctorSubject().equals(command.doctorSubject())) {
             throw new SecurityException("Doctor is not authorized for this therapy plan");

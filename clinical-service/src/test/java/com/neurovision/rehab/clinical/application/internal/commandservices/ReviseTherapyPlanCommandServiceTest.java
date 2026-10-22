@@ -33,6 +33,14 @@ class ReviseTherapyPlanCommandServiceTest {
     }
 
     @Test
+    void unknownPlanUsesTheInaccessibleResourceFailureWithoutAppending() {
+        plans.plan = null;
+        assertThrows(NoSuchElementException.class, () -> service.handle(new ReviseTherapyPlanCommand(
+                UUID.randomUUID(), planId, patientId, doctor, 2, null, null, null, null, null)));
+        assertTrue(revisions.values.isEmpty());
+    }
+
+    @Test
     void decomposesMixedEffectsAtomicallyWithOneCommandIdentity() {
         UUID commandId = UUID.randomUUID();
         var result = service.handle(new ReviseTherapyPlanCommand(commandId, planId, patientId, doctor,
