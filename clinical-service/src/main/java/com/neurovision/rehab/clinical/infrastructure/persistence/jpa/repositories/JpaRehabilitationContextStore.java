@@ -50,7 +50,11 @@ public class JpaRehabilitationContextStore implements RehabilitationContextStore
                 || changedAt.isBefore(entity.toDomain().updatedAt())) {
             throw new RehabilitationContextFailure(RehabilitationContextFailure.Kind.CONFLICT);
         }
-        if (entity.replaceRehabilitationContext(context, changedAt)) em.flush();
+        if (entity.replaceRehabilitationContext(context, changedAt)) {
+            em.flush();
+            // Return database-canonical values, including timestamp precision, under the existing locks.
+            em.refresh(entity);
+        }
         return Optional.of(snapshot(entity));
     }
 

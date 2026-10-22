@@ -30,6 +30,9 @@ class JpaRehabilitationContextStoreTest {
     final List<String> calls = new ArrayList<>();
     final Map<String, Object> parameters = new HashMap<>();
     boolean assigned = true;
+    boolean failFlush;
+    boolean failRefresh;
+    Instant persistedUpdatedAt;
     String queryText;
 
     JpaRehabilitationContextStoreTest() throws Exception { setVersion(5); }
@@ -60,7 +63,19 @@ class JpaRehabilitationContextStoreTest {
                 }
                 case "flush" -> {
                     calls.add("flush");
+                    if (failFlush) throw new IllegalStateException("synthetic-flush");
                     setVersion(entity.version() + 1);
+                    yield null;
+                }
+                case "refresh" -> {
+                    calls.add("refresh");
+                    if (failRefresh) throw new IllegalStateException("synthetic-refresh");
+                    assertSame(entity, a[0]);
+                    if (persistedUpdatedAt != null) {
+                        var field = ClinicalPatientEntity.class.getDeclaredField("updatedAt");
+                        field.setAccessible(true);
+                        field.set(entity, persistedUpdatedAt);
+                    }
                     yield null;
                 }
                 case "createQuery" -> {
@@ -111,7 +126,7 @@ class JpaRehabilitationContextStoreTest {
     }
     @Test void updateFlushesBeforeReturningTheNewVersionAndRetainsStatus() {
         var result = store().replaceAssigned(id, "doctor", 5, desired(), Instant.EPOCH.plusSeconds(1)).orElseThrow();
-        assertEquals(List.of("assignment-lock", "patient-lock", "flush"), calls);
+        assertEquals(List.of("assignment-lock", "patient-lock", "flush", "refresh"), calls);
         assertEquals(6, result.version());
         assertEquals("manual", result.context().observations());
         assertEquals(Instant.EPOCH.plusSeconds(1), result.updatedAt());
@@ -125,9 +140,33 @@ class JpaRehabilitationContextStoreTest {
         assertEquals(5, result.version());
         assertEquals(Instant.EPOCH, result.updatedAt());
     }
+    @Test void changedContextReturnsPersistedTimestampAfterFlushAndRefresh() {
+        var requested = Instant.parse("2026-10-21T00:00:00.123456789Z");
+        persistedUpdatedAt = Instant.parse("2026-10-21T00:00:00.123457Z");
+
+        var result = store().replaceAssigned(id, "doctor", 5, desired(), requested).orElseThrow();
+
+        assertEquals(List.of("assignment-lock", "patient-lock", "flush", "refresh"), calls);
+        assertEquals(persistedUpdatedAt, result.updatedAt());
+        assertNotEquals(requested, result.updatedAt());
+        assertEquals(6, result.version());
+        assertEquals("manual", result.context().observations());
+        var readBack = store().readAssigned(id, "doctor").orElseThrow();
+        assertEquals(result, readBack);
+    }
     @Test void authorizationAndWriteUseTheSameRequiredTransactionBoundary() throws Exception {
         var method = JpaRehabilitationContextStore.class.getMethod("replaceAssigned", UUID.class,
                 String.class, long.class, RehabilitationContext.class, Instant.class);
         assertEquals(Transactional.TxType.REQUIRED, method.getAnnotation(Transactional.class).value());
+    }
+    @Test void refreshFailureCannotReturnSuccessfulSnapshot() {
+        failRefresh = true;
+        assertThrows(IllegalStateException.class, () -> store().replaceAssigned(id, "doctor", 5, desired(), Instant.EPOCH.plusSeconds(1)));
+        assertEquals(List.of("assignment-lock", "patient-lock", "flush", "refresh"), calls);
+    }
+    @Test void flushFailureCannotRefreshOrReturnSuccessfulSnapshot() {
+        failFlush = true;
+        assertThrows(IllegalStateException.class, () -> store().replaceAssigned(id, "doctor", 5, desired(), Instant.EPOCH.plusSeconds(1)));
+        assertEquals(List.of("assignment-lock", "patient-lock", "flush"), calls);
     }
 }
