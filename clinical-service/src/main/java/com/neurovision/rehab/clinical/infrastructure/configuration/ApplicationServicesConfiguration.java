@@ -10,10 +10,12 @@ import com.neurovision.rehab.clinical.application.internal.commandservices.Revis
 import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeTelemetryIngestionQueryService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeHistoricalTelemetryReadQueryService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.ListPatientTherapyPlansQueryService;
+import com.neurovision.rehab.clinical.application.internal.queryservices.DoctorTherapyPlanQueryService;
 import com.neurovision.rehab.clinical.application.ports.out.authorization.HistoricalTelemetryReadAuthorizationPort;
 import com.neurovision.rehab.clinical.application.ports.out.authorization.TelemetryAuthorizationSnapshotRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.ClinicalPatientRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.DoctorPatientAssignmentRepository;
+import com.neurovision.rehab.clinical.application.ports.out.persistence.DoctorTherapyPlanReadRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.InboxEventRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapyPlanRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.TherapySessionRepository;
@@ -35,6 +37,12 @@ import java.util.UUID;
         TherapeuticExerciseParameters.Fixation.class
 })
 public class ApplicationServicesConfiguration {
+
+    @Produces
+    @ApplicationScoped
+    DoctorTherapyPlanQueryService doctorTherapyPlanQueryService(DoctorTherapyPlanReadRepository reads) {
+        return new DoctorTherapyPlanQueryService(reads, Clock.systemUTC());
+    }
 
     @Produces
     @ApplicationScoped

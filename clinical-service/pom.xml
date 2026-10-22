@@ -114,10 +114,38 @@
             </plugin>
             <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <!-- Preserve Surefire's default inner-class exclusion. -->
+                        <exclude>**/*$*</exclude>
+                        <exclude>**/DoctorTherapyPlanReadPersistenceTest.java</exclude>
+                    </excludes>
+                </configuration>
             </plugin>
             <plugin>
                 <artifactId>maven-failsafe-plugin</artifactId>
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>clinical-plan-read-postgresql</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes combine.self="override">
+                                <include>**/DoctorTherapyPlanReadPersistenceTest.java</include>
+                            </includes>
+                            <excludes combine.self="override">
+                                <exclude>**/*$*</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
