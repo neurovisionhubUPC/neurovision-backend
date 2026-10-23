@@ -42,13 +42,13 @@ public final class TherapyPlanRestAssembler {
             AppendTherapeuticConfigurationRequest request) {
         Objects.requireNonNull(request, "Request body is required");
         var exercise = TherapeuticExercise.from(new ExerciseCode(request.exerciseCode()));
-        if (request.parameterSchemaVersion() != TherapeuticExerciseParameters.SCHEMA_VERSION) {
+        if (request.parameterSchemaVersion() != 1 && request.parameterSchemaVersion() != 2) {
             throw new IllegalArgumentException("Unsupported parameter schema version");
         }
         if (request.effectiveFrom() == null) throw new IllegalArgumentException("Effective time is required");
         return new AppendTherapeuticConfigurationCommand(new TherapyPlanId(planId),
                 new ClinicalPatientId(patientId), doctor, exercise, request.parameterSchemaVersion(),
-                request.effectiveFrom(), parameters(exercise, request.parameters()));
+                request.effectiveFrom(), versionedParameters(exercise, request.parameterSchemaVersion(), request.parameters()));
     }
 
     public static TherapyPlanResponse toResponse(TherapyPlan plan) {
@@ -67,6 +67,17 @@ public final class TherapyPlanRestAssembler {
                 configuration.therapyPlanId().value(), configuration.exercise().code().value(),
                 configuration.version(), configuration.parameterSchemaVersion(),
                 configuration.effectiveFrom(), configuration.status().name());
+    }
+
+    private static TherapeuticExerciseParameters versionedParameters(TherapeuticExercise exercise, int version, JsonNode json) {
+        if (version == 1) return parameters(exercise, json);
+        if (json == null || !json.isObject()) throw new IllegalArgumentException("Parameters must be a JSON object");
+        exact(json, "parameters", "completionTarget");
+        var target = json.get("completionTarget");
+        if (target == null || !target.isObject()) throw new IllegalArgumentException("Invalid completion target");
+        exact(target, "criterion", "target");
+        return new Prescribed(parameters(exercise, json.get("parameters")),
+                new CompletionTarget(enumValue(target, "criterion", CompletionTarget.Criterion.class), integer(target, "target")));
     }
 
     private static TherapeuticExerciseParameters parameters(TherapeuticExercise exercise, JsonNode json) {

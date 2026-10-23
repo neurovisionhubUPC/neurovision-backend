@@ -13,6 +13,7 @@ import io.quarkus.test.TestTransaction;
 import io.quarkus.test.junit.*;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
+import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.time.*;
 import java.util.*;
@@ -111,8 +112,22 @@ class DoctorTherapySessionReadPersistenceTest {
         var other=query.list(OTHER.value(),PATIENT.value(),0,20,null,null,null,null);
         assertEquals(1,other.total());
         assertEquals(List.of("FOREIGN"),aliases(other));
+
+        // Read all states and exercises, including sessions from suspended/cancelled plans.
+        for(String alias:List.of("A","B","C","D","E","F","G")) detail(query,DOCTOR,alias);
+        detail(query,OTHER,"FOREIGN");
+        var knownSession=fixtures.get("A").id().value();
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),PATIENT.value(),new UUID(0,999)));
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),new UUID(1,99),knownSession));
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),EMPTY.value(),knownSession));
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),PATIENT.value(),fixtures.get("FOREIGN").id().value()));
+        assertThrows(SecurityException.class,()->query.detail(OTHER.value(),PATIENT.value(),knownSession));
+        for(String alias:List.of("ENDED","UNASSIGNED")) {
+            var denied=fixtures.get(alias);
+            assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),denied.clinicalPatientId().value(),denied.id().value()));
+        }
         entities.flush();
-        assertTrue(before.equals(snapshot()),"Session history reads changed persisted data");
+        assertTrue(before.equals(snapshot()),"Session history/detail reads changed persisted data");
 
         // Revoke just this doctor's assignment, then attest that subsequent reads fail closed.
         var assignment=assignments.findActiveByClinicalPatientIdAndDoctorSubject(PATIENT,DOCTOR).orElseThrow();
@@ -121,9 +136,33 @@ class DoctorTherapySessionReadPersistenceTest {
         entities.flush(); entities.clear();
         var revoked=snapshot();
         assertThrows(SecurityException.class,()->query.list(DOCTOR.value(),PATIENT.value(),0,20,null,null,null,null));
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),PATIENT.value(),knownSession));
         assertEquals(List.of("FOREIGN"),aliases(query.list(OTHER.value(),PATIENT.value(),0,20,null,null,null,null)));
-        assertTrue(revoked.equals(snapshot()),"Denied history reads changed persisted data");
+        detail(query,OTHER,"FOREIGN");
+        assertTrue(revoked.equals(snapshot()),"Revoked/remaining-owner reads changed persisted data");
         // TestTransaction rolls back all fixtures, including append-only configurations.
+    }
+
+    private void detail(DoctorTherapySessionQueryService query,CognitoSubject doctor,String alias) {
+        var source=fixtures.get(alias);
+        var result=query.detail(doctor.value(),source.clinicalPatientId().value(),source.id().value());
+        var actual=result.session();
+        assertTrue(source.clinicalPatientId().value().equals(result.clinicalPatientId()),"Wrong detail patient");
+        assertTrue(source.id().value().equals(actual.therapySessionId()),"Wrong detail session");
+        assertTrue(source.therapyPlanId().value().equals(actual.therapyPlanId()),"Wrong detail plan");
+        assertEquals(source.exerciseCode().value(),actual.exerciseCode());
+        assertEquals(source.status().name(),actual.status());
+        assertEquals(source.startedAt(),actual.startedAt());
+        assertEquals(source.endedAt().orElse(null),actual.endedAt());
+        assertEquals(source.activeDurationSeconds(),actual.activeDurationSeconds());
+        assertEquals(QUOTA_DATE,actual.quotaDate());
+        assertTrue(source.therapeuticConfigurationId().value().equals(actual.configurationId()),"Wrong detail frozen configuration");
+        assertEquals(1,actual.configurationVersion(),"Must not substitute the newer configuration version 9");
+        assertEquals(source.parameterSchemaVersion(),actual.parameterSchemaVersion());
+        assertEquals(source.configurationParameters(),result.configurationParameters(),"Must preserve frozen parameters, not version 9 parameters");
+        assertEquals(source.minimumValidDurationMinutes(),result.sessionLimits().minimumValidDurationMinutes());
+        assertEquals(source.maximumSessionDurationMinutes(),result.sessionLimits().maximumSessionDurationMinutes());
+        assertEquals(source.minimumValidSampleCount(),result.sessionLimits().minimumValidSampleCount());
     }
 
     private void page(DoctorTherapySessionQueryService query,String exercise,String status,String from,String to,
@@ -200,6 +239,15 @@ class DoctorTherapySessionReadPersistenceTest {
             case VISUAL_SEARCH -> TherapeuticConfigurationTestData.visualSearchSnapshot().parameters();
             case VISUAL_SCANNING -> new VisualScanning(VisualScanningMode.STANDARD_SCANNING,AffectedHemifield.LEFT,
                     300,2000,5,30,5,500,1);
+        };
+        // The newer version deliberately differs, so substituting its payload cannot pass detail assertions.
+        if(version==9) parameters=switch(exercise) {
+            case FIXATION -> new Fixation(FixationMode.SUSTAINED_TARGET_FIXATION,TargetPosition.RIGHT,
+                    600,1500,60,12,900,3);
+            case VISUAL_SEARCH -> new VisualSearch(VisualSearchMode.TARGET_SEARCH_WITH_DISTRACTORS,AffectedHemifield.RIGHT,
+                    15,3,600,6000,new BigDecimal("0.8"),60,4);
+            case VISUAL_SCANNING -> new VisualScanning(VisualScanningMode.COMPENSATORY_SACCADE,AffectedHemifield.RIGHT,
+                    600,3000,10,60,10,1000,2);
         };
         return TherapeuticExerciseConfiguration.create(new TherapeuticConfigurationId(id),plan.id(),exercise,
                 version,1,at,plan.doctorSubject(),at,parameters);

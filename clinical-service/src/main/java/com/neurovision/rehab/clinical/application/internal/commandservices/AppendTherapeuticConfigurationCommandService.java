@@ -53,6 +53,11 @@ public class AppendTherapeuticConfigurationCommandService {
         if (!plan.dailyExercisePrescriptions().containsKey(command.exercise().code())) {
             throw new IllegalStateException("Exercise is not prescribed by the therapy plan");
         }
+        if (command.parameters() instanceof TherapeuticExerciseParameters.Prescribed prescribed
+                && prescribed.completionTarget().criterion() == CompletionTarget.Criterion.ACTIVE_TIME
+                && prescribed.completionTarget().target() > plan.maximumSessionDurationMinutes() * 60L) {
+            throw new IllegalArgumentException("Completion target exceeds session safety limit");
+        }
         assignments.findActiveByClinicalPatientIdAndDoctorSubjectForUpdate(
                         command.clinicalPatientId(), command.doctorSubject())
                 .orElseThrow(() -> new SecurityException("Active doctor-patient assignment is required"));

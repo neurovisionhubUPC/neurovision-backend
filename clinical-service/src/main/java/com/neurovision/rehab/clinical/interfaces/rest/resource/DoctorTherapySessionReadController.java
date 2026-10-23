@@ -19,8 +19,9 @@ public class DoctorTherapySessionReadController {
     private final DoctorTherapySessionQueryService queries;
     private final SecurityIdentity identity;
     private final AssignedPatientRequestSupport support;
+    private final ObjectMapper mapper;
     public DoctorTherapySessionReadController(DoctorTherapySessionQueryService queries,SecurityIdentity identity,ObjectMapper mapper) {
-        this.queries=queries; this.identity=identity; this.support=new AssignedPatientRequestSupport(mapper);
+        this.queries=queries; this.identity=identity; this.support=new AssignedPatientRequestSupport(mapper); this.mapper=mapper;
     }
 
     @GET @RolesAllowed("DOCTOR")
@@ -36,6 +37,26 @@ public class DoctorTherapySessionReadController {
             if(identity.hasRole("ADMIN")) throw new SecurityException();
             var result=queries.list(actor.subject(),uuid(patient),number(page),number(size),exerciseCode,status,from,to);
             return Response.ok(DoctorTherapySessionReadRestAssembler.page(result)).header("Cache-Control","no-store").build();
+        } catch(PatientReadFailure failure) {
+            return switch(failure.kind()) {
+                case UNAUTHENTICATED -> error(401,"UNAUTHENTICATED");
+                case FORBIDDEN -> error(403,"FORBIDDEN");
+                case INVALID_REQUEST -> error(400,"INVALID_REQUEST");
+                case UNAVAILABLE -> error(503,"UNAVAILABLE");
+            };
+        } catch(SecurityException denied) { return error(403,"FORBIDDEN"); }
+        catch(IllegalArgumentException invalid) { return error(400,"INVALID_REQUEST"); }
+        catch(RuntimeException unavailable) { return error(503,"UNAVAILABLE"); }
+    }
+    @GET @Path("/{therapySessionId}") @RolesAllowed("DOCTOR")
+    @Operation(summary="Read an owned session with its frozen configuration",
+            description="Current ACTIVE assignment and session ownership required. Read-only persisted state and frozen typed parameters/limits; no Profile/CMP, plan-status gate, lease expiry, clinical interpretation or report readiness.")
+    public Response detail(@PathParam("clinicalPatientId") String patient,@PathParam("therapySessionId") String session) {
+        try {
+            var actor=support.actor(identity);
+            if(identity.hasRole("ADMIN")) throw new SecurityException();
+            var result=queries.detail(actor.subject(),uuid(patient),uuid(session));
+            return Response.ok(DoctorTherapySessionReadRestAssembler.detail(result,mapper)).header("Cache-Control","no-store").build();
         } catch(PatientReadFailure failure) {
             return switch(failure.kind()) {
                 case UNAUTHENTICATED -> error(401,"UNAUTHENTICATED");

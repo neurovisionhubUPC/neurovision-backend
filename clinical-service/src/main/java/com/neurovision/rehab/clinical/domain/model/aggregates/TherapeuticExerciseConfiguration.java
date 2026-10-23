@@ -26,7 +26,7 @@ public final class TherapeuticExerciseConfiguration {
         this.therapyPlanId = Objects.requireNonNull(therapyPlanId, "Therapy plan ID must not be null");
         this.exercise = Objects.requireNonNull(exercise, "Exercise must not be null");
         if (version < 1) throw new IllegalArgumentException("Configuration version must be positive");
-        if (parameterSchemaVersion != TherapeuticExerciseParameters.SCHEMA_VERSION) {
+        if (parameters == null || parameterSchemaVersion != parameters.schemaVersion()) {
             throw new IllegalArgumentException("Unsupported parameter schema version");
         }
         this.effectiveFrom = Objects.requireNonNull(effectiveFrom, "Effective time must not be null");

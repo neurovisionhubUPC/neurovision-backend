@@ -105,6 +105,11 @@ public final class StartTherapySessionCommandService {
                 .orElseThrow(TherapySessionConfigurationUnavailableException::new);
 
         var quotaDate = now.atZone(QUOTA_ZONE).toLocalDate();
+        if (configuration.parameters() instanceof com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticExerciseParameters.Prescribed prescribed
+                && prescribed.completionTarget().criterion() == com.neurovision.rehab.clinical.domain.model.valueobjects.CompletionTarget.Criterion.ACTIVE_TIME
+                && prescribed.completionTarget().target() > plan.maximumSessionDurationMinutes() * 60L) {
+            throw new IllegalStateException("Completion target exceeds session safety limit");
+        }
         long consumedSlots = sessionRepository.countConsumedSlots(plan.id(), quotaDate);
         long consumedExerciseSlots = sessionRepository.countConsumedExerciseSlots(
                 plan.id(), quotaDate, command.exerciseCode());

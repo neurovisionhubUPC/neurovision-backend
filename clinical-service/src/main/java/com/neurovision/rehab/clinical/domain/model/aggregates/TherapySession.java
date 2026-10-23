@@ -109,7 +109,19 @@ public final class TherapySession {
         leaseExpiresAt = renewedLeaseExpiresAt;
     }
 
-    public void complete(Instant endedAt) { transition(TherapySessionStatus.COMPLETED, endedAt, null, true); }
+    public void complete(Instant endedAt) {
+        if (configurationParameters() instanceof TherapeuticExerciseParameters.Prescribed) {
+            throw new IllegalStateException("Explicit technical progress is required");
+        }
+        transition(TherapySessionStatus.COMPLETED, endedAt, null, true);
+    }
+    public void completeWithTechnicalProgress(SessionActivityProgress progress, Instant endedAt) {
+        if (!(configurationParameters() instanceof TherapeuticExerciseParameters.Prescribed prescribed)
+                || !prescribed.completionTarget().reached(Objects.requireNonNull(progress))) {
+            throw new IllegalStateException("Technical target has not been reached");
+        }
+        transition(TherapySessionStatus.COMPLETED, endedAt, null, true);
+    }
     public void cancel(String clinicalReason, Instant endedAt) { transition(TherapySessionStatus.CANCELLED, endedAt, requireText(clinicalReason, "Cancellation reason"), meaningfulActivityReached()); }
     public void abandon(String reason, Instant endedAt) { transition(TherapySessionStatus.ABANDONED, endedAt, requireText(reason, "Abandonment reason"), meaningfulActivityReached()); }
     public void failTechnical(String reason, Instant endedAt) { transition(TherapySessionStatus.FAILED_TECHNICAL, endedAt, requireText(reason, "Technical failure reason"), meaningfulActivityReached()); }

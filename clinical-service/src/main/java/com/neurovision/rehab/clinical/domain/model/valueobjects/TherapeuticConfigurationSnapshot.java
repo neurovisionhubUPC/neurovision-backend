@@ -17,7 +17,7 @@ public record TherapeuticConfigurationSnapshot(
             throw new IllegalArgumentException("Configuration version must be positive");
         }
         Objects.requireNonNull(exercise, "Therapeutic exercise must not be null");
-        if (parameterSchemaVersion != TherapeuticExerciseParameters.SCHEMA_VERSION) {
+        if (parameters == null || parameterSchemaVersion != parameters.schemaVersion()) {
             throw new IllegalArgumentException("Unsupported parameter schema version");
         }
         Objects.requireNonNull(parameters, "Configuration parameters must not be null");

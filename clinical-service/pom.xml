@@ -120,6 +120,7 @@
                         <exclude>**/*$*</exclude>
                         <exclude>**/DoctorTherapyPlanReadPersistenceTest.java</exclude>
                         <exclude>**/DoctorTherapySessionReadPersistenceTest.java</exclude>
+                        <exclude>**/PatientSessionProgressPersistenceTest.java</exclude>
                     </excludes>
                 </configuration>
             </plugin>
@@ -130,6 +131,28 @@
     </build>
 
     <profiles>
+        <profile>
+            <id>clinical-session-progress-postgresql</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes combine.self="override">
+                                <include>**/PatientSessionProgressPersistenceTest.java</include>
+                            </includes>
+                            <excludes combine.self="override">
+                                <exclude>**/*$*</exclude>
+                            </excludes>
+                            <systemPropertyVariables>
+                                <!-- Also requires an explicit dedicated loopback JDBC URL. -->
+                                <clinical.progress-test.enabled>true</clinical.progress-test.enabled>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <profile>
             <id>clinical-session-history-postgresql</id>
             <build>

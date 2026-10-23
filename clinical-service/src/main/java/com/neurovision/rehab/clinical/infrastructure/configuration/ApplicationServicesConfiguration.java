@@ -7,6 +7,7 @@ import com.neurovision.rehab.clinical.application.internal.commandservices.Start
 import com.neurovision.rehab.clinical.application.internal.commandservices.TransitionTherapySessionCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.CreateTherapyPlanCommandService;
 import com.neurovision.rehab.clinical.application.internal.commandservices.ReviseTherapyPlanCommandService;
+import com.neurovision.rehab.clinical.application.internal.commandservices.PatientSessionProgressService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeTelemetryIngestionQueryService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeHistoricalTelemetryReadQueryService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.ListPatientTherapyPlansQueryService;
@@ -25,6 +26,7 @@ import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticExerc
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
+import jakarta.enterprise.inject.Typed;
 import java.time.Clock;
 import com.neurovision.rehab.clinical.application.ports.out.authorization.DoctorSchedulingEligibilityPort;
 import java.time.Duration;
@@ -37,6 +39,15 @@ import java.util.UUID;
         TherapeuticExerciseParameters.Fixation.class
 })
 public class ApplicationServicesConfiguration {
+    @Produces
+    @ApplicationScoped
+    @Typed(PatientSessionProgressService.class)
+    com.neurovision.rehab.clinical.application.internal.commandservices.PatientSessionProgressService patientSessionProgressService(
+            ClinicalPatientRepository patients, TherapySessionRepository sessions,
+            com.neurovision.rehab.clinical.application.ports.out.persistence.SessionActivityRepository activity) {
+        return new com.neurovision.rehab.clinical.application.internal.commandservices.PatientSessionProgressService(
+                patients, sessions, activity, Clock.systemUTC());
+    }
 
     @Produces
     @ApplicationScoped

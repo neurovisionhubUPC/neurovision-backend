@@ -2,6 +2,8 @@ package com.neurovision.rehab.clinical.infrastructure.persistence.jpa.repositori
 
 import com.neurovision.rehab.clinical.application.ports.out.persistence.DoctorTherapySessionReadRepository;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapySessionStatus;
+import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticExercise;
+import com.neurovision.rehab.clinical.infrastructure.persistence.json.TherapeuticConfigurationJsonCodec;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.persistence.EntityManager;
 import java.time.*;
@@ -10,8 +12,35 @@ import java.util.*;
 @ApplicationScoped
 public class JpaDoctorTherapySessionReadRepository implements DoctorTherapySessionReadRepository {
     private final EntityManager entities;
-    public JpaDoctorTherapySessionReadRepository(EntityManager entities) {
+    private final TherapeuticConfigurationJsonCodec codec;
+    public JpaDoctorTherapySessionReadRepository(EntityManager entities, TherapeuticConfigurationJsonCodec codec) {
         this.entities=Objects.requireNonNull(entities);
+        this.codec=Objects.requireNonNull(codec);
+    }
+
+    @Override public Optional<Detail> observeDetail(UUID patient,String doctor,UUID session) {
+        var query=entities.createNativeQuery("""
+                SELECT s.clinical_patient_id, s.id, s.therapy_plan_id, s.exercise_code, s.status,
+                  s.started_at, s.ended_at, s.active_duration_seconds, s.quota_date,
+                  s.therapeutic_configuration_id, s.configuration_version, s.parameter_schema_version,
+                  s.therapeutic_exercise, CAST(s.configuration_parameters AS text),
+                  s.minimum_valid_duration_minutes, s.maximum_session_duration_minutes, s.minimum_valid_sample_count
+                FROM therapy_sessions s
+                WHERE s.id = :session AND s.clinical_patient_id = :patient AND s.doctor_cognito_sub = :doctor
+                  AND EXISTS (SELECT 1 FROM doctor_patient_assignments a JOIN clinical_patients p ON p.id = a.clinical_patient_id
+                    WHERE a.clinical_patient_id = s.clinical_patient_id AND a.doctor_cognito_sub = :doctor AND a.status = 'ACTIVE')
+                LIMIT 2
+                """).setParameter("patient",patient).setParameter("doctor",doctor).setParameter("session",session);
+        @SuppressWarnings("unchecked") List<Object[]> rows=query.getResultList();
+        if(rows.isEmpty()) return Optional.empty();
+        if(rows.size()!=1 || rows.getFirst().length!=17) throw new IllegalStateException("Invalid session detail observation");
+        Object[] r=rows.getFirst();
+        var summary=new Session((UUID)r[1],(UUID)r[2],(String)r[3],TherapySessionStatus.valueOf((String)r[4]).name(),
+                instant(r[5]),r[6]==null?null:instant(r[6]),((Number)r[7]).longValue(),date(r[8]),
+                (UUID)r[9],((Number)r[10]).longValue(),((Number)r[11]).intValue());
+        var parameters=codec.decode(TherapeuticExercise.valueOf((String)r[12]),summary.parameterSchemaVersion(),(String)r[13]);
+        return Optional.of(new Detail((UUID)r[0],summary,parameters,
+                new SessionLimits(((Number)r[14]).intValue(),((Number)r[15]).intValue(),((Number)r[16]).longValue())));
     }
 
     @Override public Observation observe(UUID patient,String doctor,Filters filters,int offset,int limit) {

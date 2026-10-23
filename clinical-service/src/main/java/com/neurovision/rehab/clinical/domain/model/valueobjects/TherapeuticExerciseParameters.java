@@ -11,9 +11,22 @@ import java.util.Objects;
 public sealed interface TherapeuticExerciseParameters
         permits TherapeuticExerciseParameters.VisualScanning,
                 TherapeuticExerciseParameters.VisualSearch,
-                TherapeuticExerciseParameters.Fixation {
+                TherapeuticExerciseParameters.Fixation,
+                TherapeuticExerciseParameters.Prescribed {
 
     int SCHEMA_VERSION = 1;
+
+    default int schemaVersion() { return this instanceof Prescribed ? 2 : 1; }
+
+    /** Schema 2 wraps unchanged schema-1 exercise parameters with an explicit goal. */
+    record Prescribed(TherapeuticExerciseParameters parameters, CompletionTarget completionTarget)
+            implements TherapeuticExerciseParameters {
+        public Prescribed {
+            Objects.requireNonNull(parameters); Objects.requireNonNull(completionTarget);
+            if (parameters instanceof Prescribed) throw new IllegalArgumentException("Nested prescription");
+        }
+        @Override public TherapeuticExercise exercise() { return parameters.exercise(); }
+    }
 
     TherapeuticExercise exercise();
 

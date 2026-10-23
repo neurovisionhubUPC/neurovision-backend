@@ -45,6 +45,20 @@ public final class DoctorTherapySessionQueryService {
         }
     }
 
+    public Detail detail(String doctor, UUID patient, UUID session) {
+        new CognitoSubject(doctor);
+        Objects.requireNonNull(patient); Objects.requireNonNull(session);
+        Optional<Detail> result;
+        try {
+            result=Objects.requireNonNull(reads.observeDetail(patient,doctor,session));
+            if(result.isPresent() && (!patient.equals(result.get().clinicalPatientId()) || !session.equals(result.get().session().therapySessionId())))
+                throw new IllegalStateException("Inconsistent session detail observation");
+        } catch(RuntimeException unavailable) {
+            throw new IllegalStateException("Session detail unavailable",unavailable);
+        }
+        return result.orElseThrow(SecurityException::new);
+    }
+
     public record Page(UUID clinicalPatientId, List<Session> sessions, int page, int size, long total) {
         public Page { sessions=List.copyOf(sessions); }
     }

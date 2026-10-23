@@ -23,6 +23,11 @@ public class TherapeuticConfigurationJsonCodec {
     public String encode(TherapeuticExerciseParameters parameters) {
         ObjectNode json = mapper.createObjectNode();
         switch (parameters) {
+            case Prescribed p -> {
+                try { json.set("parameters", mapper.readTree(encode(p.parameters()))); }
+                catch (JsonProcessingException invalid) { throw new IllegalArgumentException("Invalid exercise parameters", invalid); }
+                json.set("completionTarget", mapper.valueToTree(p.completionTarget()));
+            }
             case VisualScanning p -> {
                 json.put("mode", p.mode().name());
                 json.put("affectedHemifield", p.affectedHemifield().name());
@@ -65,7 +70,7 @@ public class TherapeuticConfigurationJsonCodec {
 
     public TherapeuticExerciseParameters decode(
             TherapeuticExercise exercise, int parameterSchemaVersion, String value) {
-        if (parameterSchemaVersion != TherapeuticExerciseParameters.SCHEMA_VERSION) {
+        if (parameterSchemaVersion != 1 && parameterSchemaVersion != 2) {
             throw new IllegalArgumentException("Unsupported parameter schema version");
         }
         final JsonNode json;
@@ -75,6 +80,16 @@ public class TherapeuticConfigurationJsonCodec {
             throw new IllegalArgumentException("Invalid therapeutic parameter JSON", exception);
         }
         if (json == null || !json.isObject()) throw new IllegalArgumentException("Parameters must be a JSON object");
+        if (parameterSchemaVersion == 2) {
+            requireExactly(json, "parameters", "completionTarget");
+            var target = json.get("completionTarget");
+            if (target == null || !target.isObject()) throw new IllegalArgumentException("Invalid target");
+            requireExactly(target, "criterion", "target");
+            return new Prescribed(decode(exercise, 1, json.get("parameters").toString()),
+                    new com.neurovision.rehab.clinical.domain.model.valueobjects.CompletionTarget(
+                            enumValue(target, "criterion", com.neurovision.rehab.clinical.domain.model.valueobjects.CompletionTarget.Criterion.class),
+                            integer(target, "target")));
+        }
         return switch (exercise) {
             case VISUAL_SCANNING -> decodeScanning(json);
             case VISUAL_SEARCH -> decodeSearch(json);
