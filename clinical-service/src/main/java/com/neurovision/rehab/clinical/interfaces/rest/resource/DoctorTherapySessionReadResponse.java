@@ -17,11 +17,15 @@ public final class DoctorTherapySessionReadResponse {
     public record Page(UUID clinicalPatientId,List<Session> sessions,int page,int size,long total) {}
     @RegisterForReflection
     public record SessionLimits(int minimumValidDurationMinutes,int maximumSessionDurationMinutes,long minimumValidSampleCount) {}
+    /** ACTIVE_TIME targets are seconds; credited active time is always milliseconds. */
+    @RegisterForReflection
+    public record TechnicalProgress(String availability,String criterion,Long target,Long activeMilliseconds,
+            Long completedRepetitions,Boolean targetReached) {}
     @RegisterForReflection
     public record Detail(UUID clinicalPatientId,UUID therapySessionId,UUID therapyPlanId,String exerciseCode,String status,
             @JsonFormat(shape=JsonFormat.Shape.STRING) Instant startedAt,
             @JsonFormat(shape=JsonFormat.Shape.STRING) Instant endedAt,long activeDurationSeconds,
             @JsonFormat(shape=JsonFormat.Shape.STRING) LocalDate quotaDate,
             UUID configurationId,long configurationVersion,int parameterSchemaVersion,
-            JsonNode configurationParameters,SessionLimits sessionLimits) {}
+            JsonNode configurationParameters,SessionLimits sessionLimits,TechnicalProgress technicalProgress) {}
 }

@@ -19,7 +19,7 @@ class DoctorTherapySessionDetailQueryTest {
     });
     Detail detail(UUID id) {
         return new Detail(patient,new Session(id,new UUID(0,3),"fixation","ACTIVE",Instant.EPOCH,null,17,LocalDate.of(1970,1,1),new UUID(0,4),2,1),
-                new Fixation(FixationMode.SUSTAINED_TARGET_FIXATION,TargetPosition.CENTER,500,1000,50,10,800,2),new SessionLimits(1,10,25));
+                new Fixation(FixationMode.SUSTAINED_TARGET_FIXATION,TargetPosition.CENTER,500,1000,50,10,800,2),new SessionLimits(1,10,25),TechnicalProgress.notApplicable());
     }
     @Test void usesOneObservationWithoutLifecycleInference() {
         var value=detail(session);observation=Optional.of(value);

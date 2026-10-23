@@ -50,7 +50,7 @@ public class DoctorTherapySessionReadController {
     }
     @GET @Path("/{therapySessionId}") @RolesAllowed("DOCTOR")
     @Operation(summary="Read an owned session with its frozen configuration",
-            description="Current ACTIVE assignment and session ownership required. Read-only persisted state and frozen typed parameters/limits; no Profile/CMP, plan-status gate, lease expiry, clinical interpretation or report readiness.")
+            description="Current ACTIVE assignment and session ownership required. Read-only coherent persisted state, frozen parameters/limits and technicalProgress. Schema 2 exposes the frozen goal and credited activity; schema 1 is NOT_APPLICABLE with null progress values. ACTIVE_TIME target is seconds, activeMilliseconds is credited milliseconds. No GET writes, Profile/CMP, plan-status gate, lease expiry, clinical interpretation or report readiness.")
     public Response detail(@PathParam("clinicalPatientId") String patient,@PathParam("therapySessionId") String session) {
         try {
             var actor=support.actor(identity);

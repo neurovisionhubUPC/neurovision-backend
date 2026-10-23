@@ -8,12 +8,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public final class DoctorTherapySessionReadRestAssembler {
     private DoctorTherapySessionReadRestAssembler() {}
     public static DoctorTherapySessionReadResponse.Detail detail(Detail result,ObjectMapper mapper) {
-        var s=result.session(); var limits=result.sessionLimits();
+        var s=result.session(); var limits=result.sessionLimits(); var progress=result.technicalProgress();
         try {
             return new DoctorTherapySessionReadResponse.Detail(result.clinicalPatientId(),s.therapySessionId(),s.therapyPlanId(),
                     s.exerciseCode(),s.status(),s.startedAt(),s.endedAt(),s.activeDurationSeconds(),s.quotaDate(),
                     s.configurationId(),s.configurationVersion(),s.parameterSchemaVersion(),mapper.valueToTree(result.configurationParameters()),
-                    new DoctorTherapySessionReadResponse.SessionLimits(limits.minimumValidDurationMinutes(),limits.maximumSessionDurationMinutes(),limits.minimumValidSampleCount()));
+                    new DoctorTherapySessionReadResponse.SessionLimits(limits.minimumValidDurationMinutes(),limits.maximumSessionDurationMinutes(),limits.minimumValidSampleCount()),
+                    new DoctorTherapySessionReadResponse.TechnicalProgress(progress.availability().name(),
+                            progress.criterion()==null?null:progress.criterion().name(),progress.target(),
+                            progress.activeMilliseconds(),progress.completedRepetitions(),progress.targetReached()));
         } catch(RuntimeException unavailable) {
             throw new IllegalStateException("Session detail representation unavailable",unavailable);
         }

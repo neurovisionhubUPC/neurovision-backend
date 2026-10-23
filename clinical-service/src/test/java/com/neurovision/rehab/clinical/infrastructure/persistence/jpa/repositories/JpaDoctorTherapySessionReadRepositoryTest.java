@@ -29,7 +29,7 @@ class JpaDoctorTherapySessionReadRepositoryTest {
             assertEquals("createNativeQuery",m.getName()); assertEquals(1,a.length);
             statements++; sql=(String)a[0]; return query;
         });
-        return new JpaDoctorTherapySessionReadRepository(em,new com.neurovision.rehab.clinical.infrastructure.persistence.json.TherapeuticConfigurationJsonCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
+        return new JpaDoctorTherapySessionReadRepository(em,new com.neurovision.rehab.clinical.infrastructure.persistence.json.TherapeuticConfigurationJsonCodec(new com.fasterxml.jackson.databind.ObjectMapper()),new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
     }
     Filters none(){return new Filters(null,null,null,null);}
     Object[] row(Object timestamp,Object date,String status) {

@@ -3,7 +3,9 @@ package com.neurovision.rehab.clinical.infrastructure.persistence.jpa;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.neurovision.rehab.clinical.application.internal.queryservices.DoctorTherapySessionQueryService;
+import com.neurovision.rehab.clinical.application.ports.in.PatientSessionProgressUseCase;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.neurovision.rehab.clinical.domain.model.aggregates.*;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapeuticExerciseParameters.*;
@@ -35,7 +37,8 @@ class DoctorTherapySessionReadPersistenceTest {
     private static final ClinicalPatientId UNASSIGNED=new ClinicalPatientId(new UUID(1,4));
     private static final List<String> TABLES=List.of("clinical_patients","doctor_patient_assignments",
             "therapy_plans","therapy_plan_exercise_prescriptions","therapy_plan_revisions",
-            "therapy_plan_revision_exercises","therapeutic_exercise_configurations","therapy_sessions");
+            "therapy_plan_revision_exercises","therapeutic_exercise_configurations","therapy_sessions",
+            "therapy_session_progress","therapy_session_activity_receipts");
     private final Map<String,TherapySession> fixtures=new LinkedHashMap<>();
 
     @Inject AgroalDataSource dataSource;
@@ -47,6 +50,8 @@ class DoctorTherapySessionReadPersistenceTest {
     @Inject TherapeuticExerciseConfigurationRepository configurations;
     @Inject TherapySessionRepository sessions;
     @Inject DoctorTherapySessionReadRepository reads;
+    @Inject SessionActivityRepository activity;
+    @Inject ObjectMapper mapper;
 
     @BeforeAll
     void verifyDedicatedDatabaseBeforeMigrating() throws SQLException {
@@ -141,6 +146,144 @@ class DoctorTherapySessionReadPersistenceTest {
         detail(query,OTHER,"FOREIGN");
         assertTrue(revoked.equals(snapshot()),"Revoked/remaining-owner reads changed persisted data");
         // TestTransaction rolls back all fixtures, including append-only configurations.
+    }
+
+    @Test @TestTransaction @Timeout(60)
+    void readsFrozenTechnicalProgressAndRejectsCorruptionWithoutStoredChanges() throws Exception {
+        requireEmptyDatabase();
+        seed();
+        var repetitions=CompletionTarget.Criterion.REPETITIONS;
+        var time=CompletionTarget.Criterion.ACTIVE_TIME;
+        var empty=progressSession(201,repetitions,null,TherapySessionStatus.ACTIVE);
+        var partial=progressSession(202,repetitions,creditedProgress(4200,2),TherapySessionStatus.ACTIVE);
+        var reached=progressSession(203,repetitions,creditedProgress(5000,5),TherapySessionStatus.ACTIVE);
+        var completed=progressSession(204,repetitions,creditedProgress(5000,5),TherapySessionStatus.COMPLETED);
+        var abandoned=progressSession(205,repetitions,creditedProgress(4200,2),TherapySessionStatus.ABANDONED);
+        var timePartial=progressSession(206,time,creditedProgress(4999,0),TherapySessionStatus.ACTIVE);
+        var timeCompleted=progressSession(207,time,creditedProgress(5000,0),TherapySessionStatus.COMPLETED);
+        entities.flush(); entities.clear();
+        var before=snapshot();
+        var query=new DoctorTherapySessionQueryService(reads);
+
+        assertProgress(query,empty,0,0,false);
+        assertProgress(query,partial,4200,2,false);
+        assertProgress(query,reached,5000,5,true); // Reaching the target must not change ACTIVE to COMPLETED.
+        assertProgress(query,completed,5000,5,true);
+        assertProgress(query,abandoned,4200,2,false);
+        assertProgress(query,timePartial,4999,0,false);
+        assertProgress(query,timeCompleted,5000,0,true);
+        for(String alias:List.of("A","B","C","D","E","F","G")) {
+            var source=fixtures.get(alias);
+            var progress=query.detail(DOCTOR.value(),source.clinicalPatientId().value(),source.id().value()).technicalProgress();
+            assertEquals("NOT_APPLICABLE",progress.availability().name());
+            assertNull(progress.criterion()); assertNull(progress.target()); assertNull(progress.activeMilliseconds());
+            assertNull(progress.completedRepetitions()); assertNull(progress.targetReached());
+        }
+        assertThrows(SecurityException.class,()->query.detail(OTHER.value(),partial.clinicalPatientId().value(),partial.id().value()));
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),PATIENT.value(),partial.id().value()));
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),partial.clinicalPatientId().value(),new UUID(0,999)));
+        entities.flush();
+        assertTrue(before.equals(snapshot()),"Successful and denied progress reads changed stored data or receipts");
+
+        // JSONB accepts objects that are not valid application progress; the read must fail closed.
+        String valid=mapper.writeValueAsString(creditedProgress(4200,2));
+        var missing=mapper.readTree(valid);
+        ((com.fasterxml.jackson.databind.node.ObjectNode)missing).remove("completedRepetitions");
+        for(String invalid:List.of("{}",missing.toString())) {
+            replaceProgressJson(partial,invalid);
+            var corrupt=snapshot();
+            assertThrows(IllegalStateException.class,()->query.detail(DOCTOR.value(),partial.clinicalPatientId().value(),partial.id().value()));
+            assertThrows(SecurityException.class,()->query.detail(OTHER.value(),partial.clinicalPatientId().value(),partial.id().value()));
+            entities.flush();
+            assertTrue(corrupt.equals(snapshot()),"Rejected corrupt-state read changed stored data");
+        }
+        replaceProgressJson(partial,valid);
+        assertTrue(before.equals(snapshot()),"Synthetic state restoration must preserve the original fixture");
+
+        var assignment=assignments.findActiveByClinicalPatientIdAndDoctorSubject(partial.clinicalPatientId(),DOCTOR).orElseThrow();
+        assignment.end(T.plusSeconds(3600)); assignments.save(assignment);
+        entities.flush(); entities.clear();
+        var revoked=snapshot();
+        assertThrows(SecurityException.class,()->query.detail(DOCTOR.value(),partial.clinicalPatientId().value(),partial.id().value()));
+        assertProgress(query,completed,5000,5,true);
+        assertTrue(revoked.equals(snapshot()),"Revoked-assignment progress read changed stored data");
+        // TestTransaction rolls back the synthetic sessions, progress, receipts and assignment changes.
+    }
+
+    private void assertProgress(DoctorTherapySessionQueryService query,TherapySession source,
+            long milliseconds,long repetitions,boolean reached) {
+        var detail=query.detail(DOCTOR.value(),source.clinicalPatientId().value(),source.id().value());
+        var progress=detail.technicalProgress();
+        var frozen=(Prescribed)source.configurationParameters();
+        assertEquals("AVAILABLE",progress.availability().name());
+        assertEquals(frozen.completionTarget().criterion(),progress.criterion()); assertEquals(5L,progress.target());
+        assertEquals(milliseconds,progress.activeMilliseconds()); assertEquals(repetitions,progress.completedRepetitions());
+        assertEquals(reached,progress.targetReached());
+        assertEquals(source.status().name(),detail.session().status());
+        assertEquals(source.endedAt().orElse(null),detail.session().endedAt());
+        assertEquals(source.activeDurationSeconds(),detail.session().activeDurationSeconds());
+        assertEquals(1L,detail.session().configurationVersion(),"Must not substitute the newer version 9 goal");
+        assertEquals(2,detail.session().parameterSchemaVersion());
+        assertEquals(source.configurationParameters(),detail.configurationParameters());
+    }
+
+    private SessionActivityProgress creditedProgress(long milliseconds,int repetitions) {
+        var state=SessionActivityProgress.empty();
+        state=state.accept(new SessionActivityEvent(1,new UUID(8,1),0,SessionActivityEvent.Type.ACTIVITY_STARTED,null,null),T);
+        for(int i=1;i<=repetitions;i++) {
+            var id=new UUID(9,i);
+            state=state.accept(new SessionActivityEvent(1,new UUID(8,state.nextSequence()+1),state.nextSequence(),
+                    SessionActivityEvent.Type.REPETITION_STARTED,id,i),T);
+            state=state.accept(new SessionActivityEvent(1,new UUID(8,state.nextSequence()+1),state.nextSequence(),
+                    SessionActivityEvent.Type.REPETITION_FINISHED,id,i),T);
+        }
+        return state.accept(new SessionActivityEvent(1,new UUID(8,state.nextSequence()+1),state.nextSequence(),
+                SessionActivityEvent.Type.HEARTBEAT,null,null),T.plusMillis(milliseconds));
+    }
+
+    private TherapySession progressSession(long number,CompletionTarget.Criterion criterion,
+            SessionActivityProgress progress,TherapySessionStatus status) {
+        // Separate patients preserve the real one-ACTIVE-session-per-patient constraint.
+        var patient=new ClinicalPatientId(new UUID(7,number));
+        patients.save(ClinicalPatient.registerInvited(patient,new CognitoSubject("synthetic-progress-reader-"+number),T.minusSeconds(2000)));
+        assignment(patient,DOCTOR,number,false);
+        var plan=TherapyPlan.rehydrate(new TherapyPlanId(new UUID(3,number)),patient,DOCTOR,TherapyPlanStatus.ACTIVE,
+                9,10,30,null,1,15,10,Map.of(TherapeuticExercise.FIXATION.code(),10));
+        plans.save(plan);
+        var parameters=new Prescribed(TherapeuticConfigurationTestData.fixationSnapshot().parameters(),new CompletionTarget(criterion,5));
+        var frozen=TherapeuticExerciseConfiguration.create(new TherapeuticConfigurationId(new UUID(4,number)),plan.id(),
+                TherapeuticExercise.FIXATION,1,2,T.minusSeconds(1000),DOCTOR,T.minusSeconds(1000),parameters);
+        configurations.append(frozen);
+        configurations.append(TherapeuticExerciseConfiguration.create(new TherapeuticConfigurationId(new UUID(5,number)),plan.id(),
+                TherapeuticExercise.FIXATION,9,2,T.plusSeconds(1000),DOCTOR,T.plusSeconds(1000),
+                new Prescribed(new Fixation(FixationMode.SUSTAINED_TARGET_FIXATION,TargetPosition.RIGHT,600,1500,60,12,900,3),
+                        new CompletionTarget(criterion,6))));
+        boolean active=status==TherapySessionStatus.ACTIVE;
+        long seconds=progress==null?0:progress.activeMilliseconds()/1000;
+        var value=TherapySession.rehydrate(new TherapySessionId(new UUID(0,number)),plan.id(),patient,DOCTOR,
+                TherapeuticExercise.FIXATION.code(),TherapeuticConfigurationSnapshot.from(frozen),QUOTA_DATE,
+                new IdempotencyKey("progress-detail-"+number),"b".repeat(64),1,15,10,status,seconds,0,
+                active || status==TherapySessionStatus.COMPLETED,T,active?T.plusSeconds(120):null,
+                active?null:T.plusSeconds(10),status==TherapySessionStatus.ABANDONED?"Synthetic abandonment":null);
+        sessions.save(value);
+        if(progress!=null) {
+            entities.flush();
+            sessions.findByIdForUpdate(value.id()).orElseThrow();
+            activity.save(value.id(),progress);
+            var last=new SessionActivityEvent(1,new UUID(8,progress.nextSequence()),progress.nextSequence()-1,
+                    SessionActivityEvent.Type.HEARTBEAT,null,null);
+            var acknowledgement=new PatientSessionProgressUseCase.View(value.id().value(),"ACTIVE",criterion,5,
+                    progress.activeMilliseconds(),progress.completedRepetitions(),parameters.completionTarget().reached(progress),
+                    progress.nextSequence(),progress.mode(),null);
+            activity.append(value.id(),new SessionActivityRepository.Receipt(last,acknowledgement));
+        }
+        return value;
+    }
+
+    private void replaceProgressJson(TherapySession session,String json) {
+        assertEquals(1,entities.createNativeQuery("UPDATE therapy_session_progress SET state = CAST(:state AS jsonb) WHERE therapy_session_id = :session")
+                .setParameter("state",json).setParameter("session",session.id().value()).executeUpdate());
+        entities.clear();
     }
 
     private void detail(DoctorTherapySessionQueryService query,CognitoSubject doctor,String alias) {
