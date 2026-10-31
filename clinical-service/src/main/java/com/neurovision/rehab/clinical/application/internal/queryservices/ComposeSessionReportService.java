@@ -6,9 +6,9 @@ import com.neurovision.rehab.clinical.domain.model.valueobjects.CognitoSubject;
 import java.time.Clock;
 import java.util.*;
 
-/** Internal composition only: the future inbound boundary must authenticate a DOCTOR and supply
+/** Internal composition: the report-preview boundary authenticates a DOCTOR and supplies
  * that subject and the original access token. This class does not verify OIDC or a token-subject binding.
- * Unregistered until output adapters and an authenticated inbound boundary are implemented.
+ * Registered by SessionReportServicesConfiguration for that authenticated boundary.
  */
 public final class ComposeSessionReportService {
     private final DoctorTherapySessionQueryService sessions;
