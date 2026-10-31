@@ -106,10 +106,53 @@
             </plugin>
             <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/AnalyticsSessionStreamsHttpIT.java</exclude>
+                    </excludes>
+                </configuration>
             </plugin>
             <plugin>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/AnalyticsSessionStreamsHttpIT.java</exclude>
+                    </excludes>
+                </configuration>
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Explicit JVM-only integration opt-in; never activated by a property or native profile. -->
+        <profile>
+            <id>analytics-stream-discovery-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes combine.self="override">
+                                <include>**/AnalyticsSessionStreamsHttpIT.java</include>
+                            </includes>
+                            <excludes combine.self="override">
+                                <exclude>**/AnalyticsKafkaMongoIT.java</exclude>
+                            </excludes>
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <systemPropertyVariables>
+                                <analytics.stream-discovery.it.enabled>true</analytics.stream-discovery.it.enabled>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <skipITs>true</skipITs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
