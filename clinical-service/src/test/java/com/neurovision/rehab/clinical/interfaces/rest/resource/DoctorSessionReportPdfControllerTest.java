@@ -56,7 +56,9 @@ class DoctorSessionReportPdfControllerTest extends DoctorSessionReportSnapshotCo
         var s = f.create("pdf").snapshot();
         var throwing = new DoctorSessionReportSnapshotController(f.service(), new GetSessionReportSnapshotService(f),
                 identity(false, Set.of("DOCTOR"), DOCTOR, TOKEN, true), f.mapper,
-                copy -> { throw new IllegalArgumentException("private renderer failure"); });
+                copy -> { throw new IllegalArgumentException("private renderer failure"); },
+                new com.neurovision.rehab.clinical.application.internal.queryservices.ListSessionReportSnapshotsService(
+                        (doc,patientId,sessionId,offset,limit) -> { throw new AssertionError("PDF must not query the list"); }));
         jsonError(pdf(throwing, s.id().toString()), 503, "UNAVAILABLE");
     }
     @Test void pdfRouteIsDoctorOnlyAndExplicitlyProducesPdf() throws Exception {

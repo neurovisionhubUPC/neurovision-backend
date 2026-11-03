@@ -2,6 +2,8 @@ package com.neurovision.rehab.clinical.application.internal.commandservices;
 
 import com.neurovision.rehab.clinical.application.internal.queryservices.ComposeSessionReportService;
 import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSnapshotEncoder;
+import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportVisualSearchPort.Origin;
+import com.neurovision.rehab.clinical.application.internal.queryservices.PatientReadFailure;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.SessionReportSnapshotRepository;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.SessionReportSnapshotRepository.*;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
@@ -21,6 +23,9 @@ public final class CreateSessionReportSnapshotService {
     }
 
     public WriteResult create(String doctor, String originalAccessToken, UUID patient, UUID session, String rawKey) {
+        return create(doctor,originalAccessToken,patient,session,rawKey,null);
+    }
+    public WriteResult create(String doctor, String originalAccessToken, UUID patient, UUID session, String rawKey, Origin origin) {
         final String key;
         try {
             if (!new CognitoSubject(doctor).value().equals(doctor) || originalAccessToken == null
@@ -30,16 +35,23 @@ public final class CreateSessionReportSnapshotService {
         try {
             var observed = Objects.requireNonNull(copies.observeByKey(doctor, patient, session, key));
             if (!observed.authorized()) throw new SecurityException();
-            if (observed.snapshot().isPresent()) return new WriteResult(false, bound(observed.snapshot().get(), patient, session));
-            var report = composition.compose(doctor, originalAccessToken, patient, session);
+            if (observed.snapshot().isPresent()) return new WriteResult(false, selected(observed.snapshot().get(), patient, session, origin));
+            var report = composition.compose(doctor, originalAccessToken, patient, session, origin);
             var candidate = new Snapshot(UUID.randomUUID(), patient, session, report.issuedAt(), encoder.encode(report));
             var result = Objects.requireNonNull(copies.insertAuthorized(doctor, patient, session, key, candidate));
-            bound(result.snapshot(), patient, session);
+            selected(result.snapshot(), patient, session, origin);
             return result;
-        } catch (SecurityException denied) { throw new SecurityException("Session report snapshot access denied"); }
+        } catch (SessionReportSnapshotSelectionConflictException conflict) { throw conflict; }
+        catch (PatientReadFailure failure) { throw failure; }
+        catch (SecurityException denied) { throw new SecurityException("Session report snapshot access denied"); }
         catch (RuntimeException unavailable) { throw new IllegalStateException("Session report snapshot unavailable"); }
     }
 
+    private Snapshot selected(Snapshot copy, UUID patient, UUID session, Origin origin) {
+        bound(copy,patient,session);
+        if (encoder.visualSearchSelection(copy.reportJson(),session) != origin) throw new SessionReportSnapshotSelectionConflictException();
+        return copy;
+    }
     private static Snapshot bound(Snapshot copy, UUID patient, UUID session) {
         if (!patient.equals(copy.clinicalPatientId()) || !session.equals(copy.therapySessionId()))
             throw new IllegalStateException();

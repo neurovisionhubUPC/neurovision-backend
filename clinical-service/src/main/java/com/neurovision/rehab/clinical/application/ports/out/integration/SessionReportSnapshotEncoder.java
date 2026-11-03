@@ -6,4 +6,11 @@ import com.neurovision.rehab.clinical.application.internal.queryservices.Session
 @FunctionalInterface
 public interface SessionReportSnapshotEncoder {
     String encode(SessionReportV1 report);
+
+    /** Strictly reads the saved selection; absent legacy section means null, unreadable means unavailable.
+     * Encoding-only implementations must fail closed rather than guess at replay selection.
+     */
+    default SessionReportVisualSearchPort.Origin visualSearchSelection(String savedReportJson, java.util.UUID expectedSession) {
+        throw new IllegalStateException("Session report snapshot unavailable");
+    }
 }

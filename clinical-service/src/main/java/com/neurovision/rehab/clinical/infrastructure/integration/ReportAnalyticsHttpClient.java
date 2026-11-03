@@ -2,6 +2,7 @@ package com.neurovision.rehab.clinical.infrastructure.integration;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.*;
+import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportVisualSearchPort.Origin;
 import java.net.URI;
 import java.net.http.*;
 import java.time.Duration;
@@ -71,15 +72,28 @@ public final class ReportAnalyticsHttpClient {
         } catch (RuntimeException invalid) { throw unavailable(); }
     }
 
+    HttpRequest visualSearchRequest(UUID session, Origin originSelection, String token) {
+        try {
+            requireToken(token); Objects.requireNonNull(session); Objects.requireNonNull(originSelection);
+            String path = "/api/v1/analytics/sessions/" + session + "/visual-search/summary?dataOrigin=" + originSelection.name();
+            return HttpRequest.newBuilder(origin.resolve(path)).timeout(timeout)
+                    .header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build();
+        } catch (RuntimeException invalid) { throw unavailable(); }
+    }
+    public JsonNode getVisualSearch(UUID session, Origin originSelection, String originalAccessToken) {
+        return get(visualSearchRequest(session,originSelection,originalAccessToken),2048,json.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS));
+    }
     public JsonNode get(UUID session, UUID stream, Resource resource, String originalAccessToken) {
+        return get(request(session,stream,resource,originalAccessToken),resource.maximumBytes(),json);
+    }
+    private JsonNode get(HttpRequest request, int maximumBytes, ObjectReader reader) {
         CompletableFuture<HttpResponse<byte[]>> pending = null;
         try {
-            var request = request(session, stream, resource, originalAccessToken);
-            pending = send.send(request, info -> new PatientNameHttpClient.LimitedBody(resource.maximumBytes()));
+            pending = send.send(request, info -> new PatientNameHttpClient.LimitedBody(maximumBytes));
             var response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            if (response.statusCode() != 200 || response.body() == null || response.body().length > resource.maximumBytes())
+            if (response.statusCode() != 200 || response.body() == null || response.body().length > maximumBytes)
                 throw unavailable();
-            JsonNode result = json.readTree(response.body());
+            JsonNode result = reader.readTree(response.body());
             if (result == null || !result.isObject()) throw unavailable();
             return result;
         } catch (InterruptedException interrupted) {

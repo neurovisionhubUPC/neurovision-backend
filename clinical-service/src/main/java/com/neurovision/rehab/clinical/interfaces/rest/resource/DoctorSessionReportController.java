@@ -3,6 +3,7 @@ package com.neurovision.rehab.clinical.interfaces.rest.resource;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.neurovision.rehab.clinical.application.internal.queryservices.ComposeSessionReportService;
 import com.neurovision.rehab.clinical.application.internal.queryservices.PatientReadFailure;
+import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportVisualSearchPort.Origin;
 import com.neurovision.rehab.clinical.interfaces.rest.transform.SessionReportRestAssembler;
 import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.annotation.security.RolesAllowed;
@@ -20,6 +21,7 @@ public class DoctorSessionReportController {
     private final SecurityIdentity identity;
     private final ObjectMapper mapper;
     private final AssignedPatientRequestSupport support;
+    @Context private UriInfo uriInfo;
 
     public DoctorSessionReportController(ComposeSessionReportService reports, SecurityIdentity identity, ObjectMapper mapper) {
         this.reports = Objects.requireNonNull(reports);
@@ -28,16 +30,22 @@ public class DoctorSessionReportController {
         this.support = new AssignedPatientRequestSupport(mapper);
     }
 
+    /** Source-compatible omitted-selection invocation; only the overload below is a REST route. */
+    public Response preview(String patient, String session) { return preview(patient,session,null); }
+
     @GET @RolesAllowed("DOCTOR")
     @Operation(summary = "Preview an owned completed session report",
             description = "Requires DOCTOR without PATIENT/ADMIN, authorship and current ACTIVE assignment. "
                     + "Read-only bounded evidence and current identity availability; no PDF, stored report or clinical interpretation. "
+                    + "Optional visualSearchDataOrigin=SYNTHETIC|PRODUCER_REPORTED requests observed Visual Search metrics only for "
+                    + "TARGET_SEARCH_WITH_DISTRACTORS; omission preserves the existing report. Invalid origin/mode is 400. "
                     + "Incomplete or unavailable composition returns generic 503, never analytical absence.")
-    public Response preview(@PathParam("clinicalPatientId") String patient, @PathParam("therapySessionId") String session) {
+    public Response preview(@PathParam("clinicalPatientId") String patient, @PathParam("therapySessionId") String session,
+            @QueryParam("visualSearchDataOrigin") String visualSearchDataOrigin) {
         try {
             var actor = support.actor(identity);
             if (identity.hasRole("ADMIN")) throw new SecurityException();
-            var result = reports.compose(actor.subject(), actor.token(), uuid(patient), uuid(session));
+            var result = reports.compose(actor.subject(), actor.token(), uuid(patient), uuid(session), origin(visualSearchDataOrigin));
             return Response.ok(SessionReportRestAssembler.toResponse(result, mapper))
                     .header("Cache-Control", "no-store").build();
         } catch (PatientReadFailure failure) {
@@ -49,6 +57,17 @@ public class DoctorSessionReportController {
             };
         } catch (SecurityException denied) { return error(403, "FORBIDDEN"); }
         catch (RuntimeException unavailable) { return error(503, "UNAVAILABLE"); }
+    }
+
+    private Origin origin(String raw) {
+        if (raw == null) {
+            // Quarkus REST can bind an explicitly empty query value to null; only an absent key means omission.
+            if (uriInfo != null && uriInfo.getQueryParameters().containsKey("visualSearchDataOrigin"))
+                throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            return null;
+        }
+        try { return Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
     }
 
     private static UUID uuid(String raw) {

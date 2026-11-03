@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotService;
+import com.neurovision.rehab.clinical.application.internal.commandservices.SessionReportSnapshotSelectionConflictException;
+import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportVisualSearchPort.Origin;
 import com.neurovision.rehab.clinical.application.internal.queryservices.*;
 import com.neurovision.rehab.clinical.application.ports.out.persistence.SessionReportSnapshotRepository.Snapshot;
 import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportPdfRenderer;
@@ -25,33 +27,69 @@ public class DoctorSessionReportSnapshotController {
     private final SecurityIdentity identity;
     private final ObjectMapper mapper;
     private final AssignedPatientRequestSupport support;
+    @Context private UriInfo uriInfo;
     private final SessionReportPdfRenderer pdf;
+    private final ListSessionReportSnapshotsService lists;
 
     public DoctorSessionReportSnapshotController(CreateSessionReportSnapshotService creates, GetSessionReportSnapshotService reads,
-            SecurityIdentity identity, ObjectMapper mapper, SessionReportPdfRenderer pdf) {
+            SecurityIdentity identity, ObjectMapper mapper, SessionReportPdfRenderer pdf, ListSessionReportSnapshotsService lists) {
         this.creates = Objects.requireNonNull(creates); this.reads = Objects.requireNonNull(reads);
         this.identity = identity; this.mapper = Objects.requireNonNull(mapper);
         this.support = new AssignedPatientRequestSupport(mapper);
         this.pdf = Objects.requireNonNull(pdf);
+        this.lists = Objects.requireNonNull(lists);
     }
+
+    @GET @RolesAllowed("DOCTOR")
+    @Operation(summary = "List saved report copies for an owned session",
+            description = "Pure DOCTOR, current session author and ACTIVE assignment. Metadata only, page0/size20/max100, "
+                    + "createdAt DESC then UUID DESC. No peers, status gate, report parsing or rendering. Authorized empty pages are 200; database failures remain 503.")
+    public Response list(@PathParam("clinicalPatientId") String patient, @PathParam("therapySessionId") String session,
+            @QueryParam("page") @DefaultValue("0") String page, @QueryParam("size") @DefaultValue("20") String size) {
+        try {
+            var actor = actor();
+            var result = lists.list(actor.subject(), uuid(patient), uuid(session), number(page), number(size));
+            var root = JsonNodeFactory.instance.objectNode().put("clinicalPatientId", result.clinicalPatientId().toString())
+                    .put("therapySessionId", result.therapySessionId().toString()).put("page", result.page())
+                    .put("size", result.size()).put("total", result.total());
+            var items = root.putArray("snapshots");
+            for (var item : result.snapshots()) items.addObject().put("reportSnapshotId", item.reportSnapshotId().toString())
+                    .put("createdAt", item.createdAt().toString());
+            return Response.ok(new SessionReportResponse(root)).header("Cache-Control", "no-store").build();
+        } catch (PatientReadFailure failure) { return failure(failure); }
+        catch (IllegalArgumentException invalid) { return error(400, "INVALID_REQUEST"); }
+        catch (SecurityException denied) { return error(403, "FORBIDDEN"); }
+        catch (RuntimeException unavailable) { return error(503, "UNAVAILABLE"); }
+    }
+
+    private static int number(String raw) {
+        if (raw == null || !raw.matches("[0-9]{1,10}")) throw new IllegalArgumentException();
+        return Integer.parseInt(raw);
+    }
+
+    /** Source-compatible omitted-selection invocation; only the overload below is a REST route. */
+    public Response create(String patient, String session, String key, String body) { return create(patient,session,key,null,body); }
 
     @POST @RolesAllowed("DOCTOR")
     @Operation(summary = "Create a manual immutable session report copy",
             description = "Pure DOCTOR, current authorship and ACTIVE assignment required. No request body. "
-                    + "Idempotency-Key replays the stored copy without enrichment; a new key makes a new manual copy. "
+                    + "Optional visualSearchDataOrigin=SYNTHETIC|PRODUCER_REPORTED freezes observed Visual Search metrics. "
+                    + "Idempotency-Key plus the same selected/omitted origin replays without enrichment; another origin is 409. "
+                    + "A new key makes a new manual copy. Invalid origin/unsupported mode is 400. "
                     + "201 with Location for new copies, 200 for replay. Uncertain writes return generic 503 without automatic retry.")
     public Response create(@PathParam("clinicalPatientId") String patient, @PathParam("therapySessionId") String session,
-            @HeaderParam("Idempotency-Key") String key, String body) {
+            @HeaderParam("Idempotency-Key") String key, @QueryParam("visualSearchDataOrigin") String visualSearchDataOrigin, String body) {
         try {
             var actor = actor();
             var patientId = uuid(patient); var sessionId = uuid(session);
             if (body != null && !body.isBlank()) throw new IllegalArgumentException();
-            var result = creates.create(actor.subject(), actor.token(), patientId, sessionId, key);
+            var result = creates.create(actor.subject(), actor.token(), patientId, sessionId, key, origin(visualSearchDataOrigin));
             var response = Response.status(result.created() ? 201 : 200).entity(response(result.snapshot()));
             if (result.created()) response.location(URI.create("/api/v1/clinical-patients/" + patientId
                     + "/therapy-sessions/" + sessionId + "/report-snapshots/" + result.snapshot().id()));
             return response.header("Cache-Control", "no-store").build();
-        } catch (PatientReadFailure failure) { return failure(failure); }
+        } catch (SessionReportSnapshotSelectionConflictException conflict) { return error(409, "SELECTION_CONFLICT"); }
+        catch (PatientReadFailure failure) { return failure(failure); }
         catch (IllegalArgumentException invalid) { return error(400, "INVALID_REQUEST"); }
         catch (SecurityException denied) { return error(403, "FORBIDDEN"); }
         catch (RuntimeException unavailable) { return error(503, "UNAVAILABLE"); }
@@ -112,13 +150,29 @@ public class DoctorSessionReportSnapshotController {
 
     private SessionReportResponse response(Snapshot copy) {
         try {
-            JsonNode report = mapper.reader().with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(copy.reportJson());
+            var reader = mapper.reader().with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+            JsonNode report = reader.readTree(copy.reportJson());
             if (report == null || !report.isObject()) throw new IllegalStateException();
+            if (report.has("visualSearch")) {
+                // Preserve the new decimal median without changing legacy baseline number decoding.
+                JsonNode exact = reader.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(copy.reportJson());
+                ((com.fasterxml.jackson.databind.node.ObjectNode)report).set("visualSearch",exact.get("visualSearch"));
+            }
             var root = JsonNodeFactory.instance.objectNode().put("reportSnapshotId", copy.id().toString()).put("createdAt", copy.createdAt().toString());
             root.set("report", report);
             return new SessionReportResponse(root);
         } catch (Exception invalidStoredCopy) { throw new IllegalStateException("Session report snapshot unavailable"); }
+    }
+    private Origin origin(String raw) {
+        if (raw == null) {
+            // Quarkus REST can bind an explicitly empty query value to null; only an absent key means omission.
+            if (uriInfo != null && uriInfo.getQueryParameters().containsKey("visualSearchDataOrigin"))
+                throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            return null;
+        }
+        try { return Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
     }
     private static UUID uuid(String raw) {
         if (raw == null) throw new IllegalArgumentException();

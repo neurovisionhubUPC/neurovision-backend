@@ -30,7 +30,9 @@ class DoctorSessionReportSnapshotControllerTest {
     }
     DoctorSessionReportSnapshotController controller(SecurityIdentity identity) {
         return new DoctorSessionReportSnapshotController(f.service(), new GetSessionReportSnapshotService(f), identity, f.mapper,
-                new com.neurovision.rehab.clinical.infrastructure.reporting.PdfBoxSessionReportRenderer(f.mapper));
+                new com.neurovision.rehab.clinical.infrastructure.reporting.PdfBoxSessionReportRenderer(f.mapper),
+                new com.neurovision.rehab.clinical.application.internal.queryservices.ListSessionReportSnapshotsService(
+                        (d,p,s,o,l) -> { throw new AssertionError("Existing routes must not query the list"); }));
     }
     DoctorSessionReportSnapshotController doctor() { return controller(identity(false, Set.of("DOCTOR"), DOCTOR, TOKEN, true)); }
     Response create(DoctorSessionReportSnapshotController c) { return c.create(PATIENT.toString(), SESSION.toString(), "key", null); }
@@ -104,13 +106,101 @@ class DoctorSessionReportSnapshotControllerTest {
             error(create(doctor()), 503, "UNAVAILABLE"); error(get(doctor(), id), 503, "UNAVAILABLE");
         }
     }
+    @Test void selectedCreationReplayAndSavedGetPreserveTheFrozenOptionalSection() {
+        f.visualSearch=true; f.echoVisualOrigin=true;
+        var created=doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null);
+        assertEquals(201,created.getStatus()); var saved=json(created);
+        assertEquals("SYNTHETIC",saved.path("report").path("visualSearch").path("dataOrigin").asText());
+        var id=UUID.fromString(saved.path("reportSnapshotId").asText());
+        int peers=f.peers; f.failPeer="names";
+        var replay=doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null);
+        assertEquals(200,replay.getStatus()); assertEquals(saved,json(replay)); assertEquals(saved,json(get(doctor(),id)));
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","PRODUCER_REPORTED",null),409,"SELECTION_CONFLICT");
+        error(create(doctor()),409,"SELECTION_CONFLICT"); assertEquals(peers,f.peers); assertEquals(1,f.writes);
+    }
+    @Test void savedSelectedMedianPreservesDecimalPrecisionWithoutChangingLegacyNumbers() {
+        f.visualSearch=true;
+        var median=new java.math.BigDecimal("9223372036854775806.5");
+        f.visualSummary=new com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportVisualSearchPort.Summary(
+                "visual-search-trial-v1",SESSION,new UUID(0,4),1,
+                com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportVisualSearchPort.Origin.SYNTHETIC,
+                1,1,0,0,1,median);
+        var created=doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null);
+        assertEquals(201,created.getStatus()); var saved=json(created);
+        assertEquals(median,saved.path("report").path("visualSearch").path("medianSearchDurationMs").decimalValue());
+        var id=UUID.fromString(saved.path("reportSnapshotId").asText());
+        assertEquals(median,json(get(doctor(),id)).path("report").path("visualSearch").path("medianSearchDurationMs").decimalValue());
+        var legacyId=UUID.randomUUID(); String legacy="{\"legacyNumber\":0.1234567890123456789}";
+        f.copies.put("legacy",new Snapshot(legacyId,PATIENT,SESSION,TIME,legacy));
+        try {
+            assertEquals(f.mapper.readTree(legacy).path("legacyNumber"),json(get(doctor(),legacyId)).path("report").path("legacyNumber"));
+        } catch (java.io.IOException failure) { throw new AssertionError(failure); }
+    }
+    @Test void explicitOriginValidationUnsupportedModeAndConflictHaveDistinctSafeStatuses() {
+        for (String invalid : List.of("", "synthetic", "UNKNOWN", " SYNTHETIC"))
+            error(doctor().create(PATIENT.toString(),SESSION.toString(),"key",invalid,null),400,"INVALID_REQUEST");
+        assertEquals(0,f.reads);
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null),400,"INVALID_REQUEST");
+        assertEquals(0,f.peers); assertEquals(0,f.writes);
+        create(doctor()); int peers=f.peers;
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null),409,"SELECTION_CONFLICT");
+        assertEquals(peers,f.peers); assertEquals(1,f.writes);
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC","{}"),400,"INVALID_REQUEST");
+    }
+    private <T> T queryContext(T controller, boolean present, List<String> values) throws Exception {
+        var query = new jakarta.ws.rs.core.MultivaluedHashMap<String, String>();
+        if (present) query.put("visualSearchDataOrigin", values);
+        var uri = Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{jakarta.ws.rs.core.UriInfo.class},
+                (p, m, a) -> { if (m.getName().equals("getQueryParameters")) return query; throw new AssertionError("Unexpected URI context read"); });
+        var field = controller.getClass().getDeclaredField("uriInfo"); field.setAccessible(true); field.set(controller, uri);
+        return controller;
+    }
+
+    @Test void frameworkCollapsedBlankOriginIs400BeforeSnapshotReadsOrEnrichment() throws Exception {
+        for (var values : List.of(List.of(""), List.<String>of(), Arrays.asList((String)null))) {
+            var response = queryContext(doctor(), true, values).create(PATIENT.toString(), SESSION.toString(), "key", null, null);
+            error(response, 400, "INVALID_REQUEST"); assertNull(response.getLocation());
+            assertEquals(0, f.reads); assertEquals(0, f.writes); assertEquals(0, f.peers); assertTrue(f.copies.isEmpty());
+        }
+    }
+
+    @Test void absentQueryContextPreservesOmittedCreationReplayAndBothSelectedOrigins() throws Exception {
+        var created = create(queryContext(doctor(), false, List.of()));
+        assertEquals(201, created.getStatus()); var frozen = json(created);
+        assertEquals("no-store", created.getHeaderString("Cache-Control")); assertNotNull(created.getLocation());
+        assertFalse(frozen.path("report").has("visualSearch"));
+        int peers = f.peers; f.failPeer = "names";
+        var replay = create(queryContext(doctor(), false, List.of()));
+        assertEquals(200, replay.getStatus()); assertEquals("no-store", replay.getHeaderString("Cache-Control")); assertNull(replay.getLocation());
+        assertTrue(frozen.equals(json(replay)), "Omitted replay must preserve the exact saved copy");
+        assertEquals(peers, f.peers); assertEquals(1, f.writes);
+        f.failPeer = null; f.visualSearch = true; f.echoVisualOrigin = true;
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            var selected = queryContext(doctor(), true, List.of(origin)).create(PATIENT.toString(), SESSION.toString(), "key-" + origin, origin, null);
+            assertEquals(201, selected.getStatus()); assertEquals("no-store", selected.getHeaderString("Cache-Control")); assertNotNull(selected.getLocation());
+            assertEquals(origin, json(selected).path("report").path("visualSearch").path("dataOrigin").asText());
+        }
+        assertEquals(2, f.visualCalls); assertEquals(3, f.writes); assertEquals(3, f.copies.size());
+    }
+
+    @Test void blankOriginRetainsSnapshotAuthenticationAndRolePrecedence() throws Exception {
+        error(create(queryContext(controller(null), true, List.of(""))), 401, "UNAUTHENTICATED");
+        for (var roles : List.of(Set.of("PATIENT"), Set.of("ADMIN"), Set.of("DOCTOR", "PATIENT"), Set.of("DOCTOR", "ADMIN")))
+            error(create(queryContext(controller(identity(false, roles, DOCTOR, TOKEN, true)), true, List.of(""))), 403, "FORBIDDEN");
+        assertEquals(0, f.reads); assertEquals(0, f.writes); assertEquals(0, f.peers);
+    }
+
     @Test void routesAreDoctorOnlyAndUseExistingAuthenticatedActorBoundary() throws Exception {
         var type = DoctorSessionReportSnapshotController.class;
         assertEquals("/api/v1/clinical-patients/{clinicalPatientId}/therapy-sessions/{therapySessionId}/report-snapshots",
                 type.getAnnotation(jakarta.ws.rs.Path.class).value());
         assertNotNull(type.getAnnotation(jakarta.enterprise.context.RequestScoped.class));
-        var create = type.getMethod("create", String.class, String.class, String.class, String.class);
+        var context = type.getDeclaredField("uriInfo");
+        assertEquals(jakarta.ws.rs.core.UriInfo.class, context.getType());
+        assertNotNull(context.getAnnotation(jakarta.ws.rs.core.Context.class));
+        var create = type.getMethod("create", String.class, String.class, String.class, String.class, String.class);
         var get = type.getMethod("get", String.class, String.class, String.class);
+        assertEquals("visualSearchDataOrigin",create.getParameters()[3].getAnnotation(jakarta.ws.rs.QueryParam.class).value());
         assertNotNull(create.getAnnotation(jakarta.ws.rs.POST.class)); assertNotNull(get.getAnnotation(jakarta.ws.rs.GET.class));
         assertEquals("/{reportSnapshotId}", get.getAnnotation(jakarta.ws.rs.Path.class).value());
         assertEquals("reportSnapshotId", get.getParameters()[2].getAnnotation(jakarta.ws.rs.PathParam.class).value());

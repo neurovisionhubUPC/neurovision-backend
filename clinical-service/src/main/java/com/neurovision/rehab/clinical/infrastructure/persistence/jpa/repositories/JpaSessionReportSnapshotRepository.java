@@ -1,6 +1,7 @@
 package com.neurovision.rehab.clinical.infrastructure.persistence.jpa.repositories;
 
 import com.neurovision.rehab.clinical.application.ports.out.persistence.SessionReportSnapshotRepository;
+import com.neurovision.rehab.clinical.application.ports.out.persistence.SessionReportSnapshotListRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
@@ -9,7 +10,7 @@ import java.time.*;
 import java.util.*;
 
 @ApplicationScoped
-public class JpaSessionReportSnapshotRepository implements SessionReportSnapshotRepository {
+public class JpaSessionReportSnapshotRepository implements SessionReportSnapshotRepository, SessionReportSnapshotListRepository {
     private final EntityManager entities;
     public JpaSessionReportSnapshotRepository(EntityManager entities) { this.entities = Objects.requireNonNull(entities); }
 
@@ -19,6 +20,35 @@ public class JpaSessionReportSnapshotRepository implements SessionReportSnapshot
             WHERE s.id = :session AND s.clinical_patient_id = :patient AND s.doctor_cognito_sub = :doctor
               AND a.status = 'ACTIVE'
             """;
+
+    @Override public SessionReportSnapshotListRepository.ListObservation observeList(String doctor, UUID patient, UUID session,
+            int offset, int limit) {
+        if (offset < 0 || limit < 1 || limit > 100) throw new IllegalArgumentException("Invalid snapshot page");
+        var query = scope(entities.createNativeQuery("WITH authorized AS (SELECT EXISTS (" + AUTHORIZED + """
+                ) AS allowed), filtered AS (
+                  SELECT r.id, r.created_at FROM session_report_snapshots r
+                  WHERE r.clinical_patient_id = :patient AND r.therapy_session_id = :session
+                    AND r.doctor_cognito_sub = :doctor AND (SELECT allowed FROM authorized)
+                ), page AS (
+                  SELECT id, created_at FROM filtered ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset
+                )
+                SELECT a.allowed, (SELECT count(*) FROM filtered), p.id, p.created_at
+                FROM authorized a LEFT JOIN page p ON true ORDER BY p.created_at DESC, p.id DESC
+                """), doctor, patient, session).setParameter("offset", offset).setParameter("limit", limit);
+        @SuppressWarnings("unchecked") List<Object[]> rows = query.getResultList();
+        if (rows.isEmpty() || rows.size() > limit || rows.getFirst().length != 4
+                || !(rows.getFirst()[0] instanceof Boolean) || !(rows.getFirst()[1] instanceof Number)) throw unavailable();
+        boolean allowed = (Boolean) rows.getFirst()[0]; long total = ((Number) rows.getFirst()[1]).longValue();
+        var summaries = new ArrayList<SessionReportSnapshotListRepository.Summary>();
+        for (var row : rows) {
+            if (row.length != 4 || !Objects.equals(row[0], allowed) || !(row[1] instanceof Number count)
+                    || count.longValue() != total) throw unavailable();
+            if (row[2] == null) {
+                if (rows.size() != 1 || row[3] != null) throw unavailable();
+            } else summaries.add(new SessionReportSnapshotListRepository.Summary((UUID) row[2], instant(row[3])));
+        }
+        return new SessionReportSnapshotListRepository.ListObservation(allowed, summaries, total);
+    }
 
     @Override public Observation observeByKey(String doctor, UUID patient, UUID session, String key) {
         return observe(doctor, patient, session, "r.idempotency_key = :lookup", key);

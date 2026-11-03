@@ -201,13 +201,78 @@ class DoctorSessionReportControllerTest {
         assertEquals(List.of("detail", "resolve", "names", "doctor", "analytics"), calls);
     }
 
+    @Test void selectedPreviewProjectsTheSummaryWithoutChangingTheSavedCopyRoutes() {
+        var f=new com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.Fixture();
+        f.visualSearch=true; f.echoVisualOrigin=true;
+        var controller=new DoctorSessionReportController(f.composer(),identity(false,Set.of("DOCTOR"),
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.DOCTOR,
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.TOKEN,true),mapper);
+        var response=controller.preview(PATIENT.toString(),SESSION.toString(),"PRODUCER_REPORTED");
+        assertEquals(200,response.getStatus()); JsonNode root=mapper.valueToTree(response.getEntity());
+        assertEquals("PRODUCER_REPORTED",root.path("visualSearch").path("dataOrigin").asText());
+        assertEquals("no-store",response.getHeaderString("Cache-Control")); assertEquals(1,f.visualCalls); assertEquals(0,f.writes);
+    }
+    @Test void invalidVisualSearchOriginIs400BeforePeersAndUnsupportedModeIs400AfterAuthorization() {
+        for (String invalid : List.of("", "synthetic", "UNKNOWN", " SYNTHETIC"))
+            error(doctor().preview(PATIENT.toString(),SESSION.toString(),invalid),400,"INVALID_REQUEST");
+        assertTrue(calls.isEmpty());
+        error(doctor().preview(PATIENT.toString(),SESSION.toString(),"SYNTHETIC"),400,"INVALID_REQUEST");
+        assertEquals(List.of("detail"),calls);
+    }
+    private <T> T queryContext(T controller, boolean present, List<String> values) throws Exception {
+        var query = new jakarta.ws.rs.core.MultivaluedHashMap<String, String>();
+        if (present) query.put("visualSearchDataOrigin", values);
+        var uri = Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{jakarta.ws.rs.core.UriInfo.class},
+                (p, m, a) -> { if (m.getName().equals("getQueryParameters")) return query; throw new AssertionError("Unexpected URI context read"); });
+        var field = controller.getClass().getDeclaredField("uriInfo"); field.setAccessible(true); field.set(controller, uri);
+        return controller;
+    }
+
+    @Test void frameworkCollapsedBlankOriginIs400BeforeAnyRead() throws Exception {
+        for (var values : List.of(List.of(""), List.<String>of(), Arrays.asList((String)null))) {
+            var response = queryContext(doctor(), true, values).preview(PATIENT.toString(), SESSION.toString(), null);
+            error(response, 400, "INVALID_REQUEST"); assertNull(response.getLocation());
+            assertTrue(calls.isEmpty());
+        }
+    }
+
+    @Test void absentQueryContextPreservesOmissionAndBothSelectedOrigins() throws Exception {
+        var omitted = queryContext(doctor(), false, List.of()).preview(PATIENT.toString(), SESSION.toString(), null);
+        assertEquals(200, omitted.getStatus()); assertEquals("no-store", omitted.getHeaderString("Cache-Control"));
+        assertFalse(mapper.valueToTree(omitted.getEntity()).has("visualSearch"));
+        assertEquals(List.of("detail", "resolve", "names", "doctor", "analytics"), calls);
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            var f = new com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.Fixture();
+            f.visualSearch = true; f.echoVisualOrigin = true;
+            var c = new DoctorSessionReportController(f.composer(), identity(false, Set.of("DOCTOR"),
+                    com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.DOCTOR,
+                    com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.TOKEN, true), mapper);
+            var selected = queryContext(c, true, List.of(origin)).preview(PATIENT.toString(), SESSION.toString(), origin);
+            assertEquals(200, selected.getStatus()); assertEquals("no-store", selected.getHeaderString("Cache-Control"));
+            assertEquals(origin, mapper.valueToTree(selected.getEntity()).path("visualSearch").path("dataOrigin").asText());
+            assertEquals(1, f.visualCalls); assertEquals(4, f.peers); assertEquals(0, f.writes);
+        }
+    }
+
+    @Test void blankOriginRetainsAuthenticationAndRolePrecedence() throws Exception {
+        error(queryContext(controller(null), true, List.of("")).preview(PATIENT.toString(), SESSION.toString(), null), 401, "UNAUTHENTICATED");
+        for (var roles : List.of(Set.of("PATIENT"), Set.of("ADMIN"), Set.of("DOCTOR", "PATIENT"), Set.of("DOCTOR", "ADMIN")))
+            error(queryContext(controller(identity(false, roles, SUBJECT, TOKEN, true)), true, List.of("")).preview(
+                    PATIENT.toString(), SESSION.toString(), null), 403, "FORBIDDEN");
+        assertTrue(calls.isEmpty());
+    }
+
     @Test void routeIsReadOnlyDoctorOnlyAndAcceptsOnlyTwoPathIdentifiers() throws Exception {
         var type = DoctorSessionReportController.class;
         assertEquals("/api/v1/clinical-patients/{clinicalPatientId}/therapy-sessions/{therapySessionId}/report-preview",
                 type.getAnnotation(jakarta.ws.rs.Path.class).value());
         assertNotNull(type.getAnnotation(jakarta.enterprise.context.RequestScoped.class));
-        var method = type.getMethod("preview", String.class, String.class);
+        var context = type.getDeclaredField("uriInfo");
+        assertEquals(jakarta.ws.rs.core.UriInfo.class, context.getType());
+        assertNotNull(context.getAnnotation(jakarta.ws.rs.core.Context.class));
+        var method = type.getMethod("preview", String.class, String.class, String.class);
         assertNotNull(method.getAnnotation(jakarta.ws.rs.GET.class));
+        assertEquals("visualSearchDataOrigin",method.getParameters()[2].getAnnotation(jakarta.ws.rs.QueryParam.class).value());
         assertArrayEquals(new String[]{"DOCTOR"}, method.getAnnotation(jakarta.annotation.security.RolesAllowed.class).value());
         assertEquals("clinicalPatientId", method.getParameters()[0].getAnnotation(jakarta.ws.rs.PathParam.class).value());
         assertEquals("therapySessionId", method.getParameters()[1].getAnnotation(jakarta.ws.rs.PathParam.class).value());

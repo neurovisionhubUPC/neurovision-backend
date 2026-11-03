@@ -26,6 +26,9 @@ public class CreateSessionReportSnapshotServiceTest {
         public int reads, writes, peers;
         public CyclicBarrier firstRequests;
         public String firstName = "Synthetic";
+        public boolean visualSearch, echoVisualOrigin;
+        public volatile SessionReportVisualSearchPort.Summary visualSummary;
+        public int visualCalls;
         public final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
         public Observation observeByKey(String doctor, UUID patient, UUID session, String key) {
             reads++;
@@ -58,8 +61,9 @@ public class CreateSessionReportSnapshotServiceTest {
                 public DoctorTherapySessionReadRepository.Observation observe(UUID p, String d, Filters f, int o, int l) { throw new AssertionError(); }
                 public Optional<Detail> observeDetail(UUID p, String d, UUID s) {
                     if (compositionDenied) return Optional.empty();
-                    var parameters = TherapeuticConfigurationTestData.fixationSnapshot().parameters();
-                    return Optional.of(new Detail(p, new Session(s, new UUID(0, 3), "fixation", "COMPLETED",
+                    var parameters = visualSearch ? TherapeuticConfigurationTestData.visualSearchSnapshot().parameters()
+                            : TherapeuticConfigurationTestData.fixationSnapshot().parameters();
+                    return Optional.of(new Detail(p, new Session(s, new UUID(0, 3), parameters.exercise().code().value(), "COMPLETED",
                             TIME.minusSeconds(180), TIME.minusSeconds(60), 120, LocalDate.of(2026, 10, 1), new UUID(0, 4), 1, 1),
                             parameters, new SessionLimits(1, 10, 25), TechnicalProgress.notApplicable()));
                 }
@@ -74,12 +78,18 @@ public class CreateSessionReportSnapshotServiceTest {
             return new ComposeSessionReportService(sessions, patients, names,
                     (d, t) -> { peer("doctor"); return new DoctorReportIdentityPort.Identity(d,
                             DoctorReportIdentityPort.Availability.AVAILABLE, "Synthetic", "Doctor", null, null); },
-                    (s, t) -> { peer("analytics"); return new SessionReportAnalyticsPort.ConfirmedNoEvidence(s); }, Clock.fixed(TIME, ZoneOffset.UTC));
+                    (s, t) -> { peer("analytics"); return new SessionReportAnalyticsPort.ConfirmedNoEvidence(s); }, (s, o, t) -> { peer("visual"); visualCalls++; assertEquals(TOKEN,t);
+                        if (echoVisualOrigin) return new SessionReportVisualSearchPort.Summary("visual-search-trial-v1",s,new UUID(0,4),1,o,1,1,0,0,1,java.math.BigDecimal.TEN);
+                        return visualSummary; }, Clock.fixed(TIME, ZoneOffset.UTC));
         }
         public CreateSessionReportSnapshotService service() {
-            return new CreateSessionReportSnapshotService(this, composer(), report -> {
-                if (failEncoder) throw new IllegalArgumentException("private encoder");
-                return SessionReportRestAssembler.toResponse(report, mapper).representation().toString();
+            var codec = new com.neurovision.rehab.clinical.infrastructure.integration.JsonSessionReportSnapshotEncoder(mapper);
+            return new CreateSessionReportSnapshotService(this, composer(), new SessionReportSnapshotEncoder() {
+                public String encode(SessionReportV1 report) {
+                    if (failEncoder) throw new IllegalArgumentException("private encoder");
+                    return codec.encode(report);
+                }
+                public SessionReportVisualSearchPort.Origin visualSearchSelection(String json, UUID session) { return codec.visualSearchSelection(json,session); }
             });
         }
         public WriteResult create(String key) { return service().create(DOCTOR, TOKEN, PATIENT, SESSION, key); }

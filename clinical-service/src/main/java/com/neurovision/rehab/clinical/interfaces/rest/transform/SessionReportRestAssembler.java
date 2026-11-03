@@ -49,6 +49,15 @@ public final class SessionReportRestAssembler {
         } else {
             analytics.put("availability", "CONFIRMED_NO_EVIDENCE");
         }
+        if (report.visualSearch() != null) {
+            var selected = report.visualSearch();
+            root.putObject("visualSearch").put("calculationVersion",selected.calculationVersion())
+                    .put("therapySessionId",selected.therapySessionId().toString()).put("configurationId",selected.configurationId().toString())
+                    .put("configurationVersion",selected.configurationVersion()).put("dataOrigin",selected.dataOrigin().name())
+                    .put("reportedTrialCount",selected.reportedTrialCount()).put("hitCount",selected.hitCount())
+                    .put("omissionCount",selected.omissionCount()).put("interruptedCount",selected.interruptedCount())
+                    .put("eligibleSearchCount",selected.eligibleSearchCount()).put("medianSearchDurationMs",selected.medianSearchDurationMs());
+        }
         return new SessionReportResponse(root);
     }
 

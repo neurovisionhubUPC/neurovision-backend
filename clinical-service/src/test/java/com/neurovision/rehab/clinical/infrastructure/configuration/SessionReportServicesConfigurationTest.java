@@ -21,13 +21,16 @@ class SessionReportServicesConfigurationTest {
     @Test void constructsReviewedAdaptersWithoutMakingRequestsAndRejectsUnsafeConfiguration() {
         assertInstanceOf(ProfileDoctorReportIdentityAdapter.class, configuration.doctorReportIdentity("http://localhost:8082", 4000, mapper));
         assertInstanceOf(AnalyticsSessionReportAdapter.class, configuration.sessionReportAnalytics("http://localhost:8085", 4000, mapper));
+        assertInstanceOf(AnalyticsVisualSearchReportAdapter.class,configuration.sessionReportVisualSearch("http://localhost:8085",4000,mapper));
         for (String base : List.of("file:///tmp/report", "http://user@localhost", "http://localhost/path", "http://localhost?query=x", "http://localhost#fragment")) {
             assertThrows(IllegalArgumentException.class, () -> configuration.doctorReportIdentity(base, 4000, mapper));
             assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportAnalytics(base, 4000, mapper));
+            assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportVisualSearch(base,4000,mapper));
         }
         for (long timeout : List.of(99L, 10001L)) {
             assertThrows(IllegalArgumentException.class, () -> configuration.doctorReportIdentity("http://localhost:8082", timeout, mapper));
             assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportAnalytics("http://localhost:8085", timeout, mapper));
+            assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportVisualSearch("http://localhost:8085",timeout,mapper));
         }
     }
 
@@ -44,7 +47,7 @@ class SessionReportServicesConfigurationTest {
             public Map<UUID, String> resolve(String d, List<UUID> ids) { throw new AssertionError(); }
         }, names);
         var service = configuration.sessionReports(sessions, patients, names,
-                (d, t) -> { throw new AssertionError(); }, (s, t) -> { throw new AssertionError(); });
+                (d, t) -> { throw new AssertionError(); }, (s, t) -> { throw new AssertionError(); }, (s,o,t) -> { throw new AssertionError(); });
         assertThrows(SecurityException.class, () -> service.compose("synthetic-doctor", "synthetic-token", new UUID(0, 1), new UUID(0, 2)));
         assertEquals(1, calls[0]);
     }
@@ -56,8 +59,8 @@ class SessionReportServicesConfigurationTest {
             assertNotNull(method.getAnnotation(Produces.class)); assertNotNull(method.getAnnotation(ApplicationScoped.class));
             if (method.getReturnType() == ComposeSessionReportService.class) {
                 assertArrayEquals(new Class<?>[]{DoctorTherapySessionQueryService.class, AssignedPatientQueryService.class,
-                        AssignedPatientNamesPort.class, DoctorReportIdentityPort.class, SessionReportAnalyticsPort.class}, method.getParameterTypes());
-            } else if (method.getReturnType() == DoctorReportIdentityPort.class || method.getReturnType() == SessionReportAnalyticsPort.class) {
+                        AssignedPatientNamesPort.class, DoctorReportIdentityPort.class, SessionReportAnalyticsPort.class, SessionReportVisualSearchPort.class}, method.getParameterTypes());
+            } else if (method.getReturnType() == DoctorReportIdentityPort.class || method.getReturnType() == SessionReportAnalyticsPort.class || method.getReturnType() == SessionReportVisualSearchPort.class) {
                 String prefix = method.getReturnType() == DoctorReportIdentityPort.class ? "clinical.profile" : "clinical.analytics";
                 assertEquals(prefix + ".base-url", method.getParameters()[0].getAnnotation(ConfigProperty.class).name());
                 assertEquals(prefix + ".timeout-ms", method.getParameters()[1].getAnnotation(ConfigProperty.class).name());
@@ -87,12 +90,23 @@ class SessionReportServicesConfigurationTest {
                         ComposeSessionReportService.class, SessionReportSnapshotEncoder.class).getParameterTypes());
     }
 
+    @Test void listingProducerOnlyNeedsItsReadOnlyPortAndDoesNotReadEagerly() {
+        int[] calls = {0};
+        var listing = configuration.listReportSnapshots((doctor, patient, session, offset, limit) -> {
+            calls[0]++;
+            return new com.neurovision.rehab.clinical.application.ports.out.persistence.SessionReportSnapshotListRepository.ListObservation(true, List.of(), 0);
+        });
+        assertEquals(0, calls[0]);
+        assertTrue(listing.list("synthetic-doctor", new UUID(0,1), new UUID(0,2), 0,20).snapshots().isEmpty());
+        assertEquals(1, calls[0]);
+    }
+
     private static Set<String> fields(com.fasterxml.jackson.databind.JsonNode node) {
         var names = new HashSet<String>(); node.fieldNames().forEachRemaining(names::add); return names;
     }
 
     @Test void sourceBeanDeclarationsHaveExactlyOneProviderForEverySharedAndNewGraphType() throws Exception {
-        var types = List.of(ComposeSessionReportService.class, DoctorReportIdentityPort.class, SessionReportAnalyticsPort.class,
+        var types = List.of(ComposeSessionReportService.class, DoctorReportIdentityPort.class, SessionReportAnalyticsPort.class, SessionReportVisualSearchPort.class,
                 DoctorTherapySessionQueryService.class, AssignedPatientQueryService.class, AssignedPatientNamesPort.class,
                 SessionReportSnapshotRepository.class, SessionReportSnapshotEncoder.class, CreateSessionReportSnapshotService.class, GetSessionReportSnapshotService.class);
         var counts = new HashMap<Class<?>, Integer>(); types.forEach(type -> counts.put(type, 0));

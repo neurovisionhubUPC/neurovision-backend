@@ -21,12 +21,15 @@ public class AnalyticsKafkaMongoTestResource implements QuarkusTestResourceLifec
     private KafkaContainer kafka;
     private MongoDBContainer mongo;
     private boolean mongoOnly;
+    private boolean visualSearch;
     private Properties pullConfiguration;
     private Object previousPullPolicy;
 
     @Override
     public void init(Map<String, String> args) {
         mongoOnly = "mongo-only".equals(args.get("mode"));
+        visualSearch = "visual-search".equals(args.get("purpose"));
+        if (visualSearch && !mongoOnly) throw new IllegalStateException("Visual Search requires Mongo-only mode");
     }
 
     @Override
@@ -62,7 +65,9 @@ public class AnalyticsKafkaMongoTestResource implements QuarkusTestResourceLifec
     }
 
     private Map<String, String> startMongoOnly() {
-        requireStreamDiscoveryOptIn(); // Must precede Testcontainers configuration or Docker access.
+        // Both paths retain explicit admission before Testcontainers configuration or Docker access.
+        if (visualSearch) VisualSearchTrialStoreMongoProfile.requireOptIn();
+        else requireStreamDiscoveryOptIn();
         try {
             var configuration = TestcontainersConfiguration.getInstance();
             if (Boolean.parseBoolean(System.getenv("TESTCONTAINERS_RYUK_DISABLED"))
