@@ -28,14 +28,19 @@ public class VisualSearchTrialReceptionHttpProfile implements QuarkusTestProfile
 
     @Override public Set<Class<?>> getEnabledAlternatives() {
         requireOptIn();
-        return Set.of(VisualSearchTrialStoreStub.class);
+        return Set.of(VisualSearchTrialStoreStub.class, StandardScanningTrialStoreStub.class,
+                SustainedFixationTrialStoreStub.class, CompensatorySaccadeTrialStoreStub.class, SystematicExplorationTrialStoreStub.class);
     }
 
     @Override public List<TestResourceEntry> testResources() {
         requireOptIn();
         return List.of(new TestResourceEntry(OidcWiremockTestResource.class),
                 new TestResourceEntry(ClinicalHeatmapAuthorizationStubResource.class,
-                        Map.of("visual-search-reception-controls", "true", "visual-search-summary-controls", "true")));
+                        Map.of("visual-search-reception-controls", "true", "visual-search-summary-controls", "true",
+                                "standard-scanning-reception-controls", "true", "standard-scanning-summary-controls", "true",
+                                "sustained-fixation-reception-controls", "true",
+                                "compensatory-saccade-reception-controls", "true",
+                                "systematic-exploration-reception-controls", "true")));
     }
 
     @Override public Map<String, String> getConfigOverrides() {

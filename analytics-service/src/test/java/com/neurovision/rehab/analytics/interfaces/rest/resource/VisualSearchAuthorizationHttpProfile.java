@@ -22,7 +22,9 @@ public class VisualSearchAuthorizationHttpProfile implements QuarkusTestProfile 
     @Override public List<TestResourceEntry> testResources() {
         requireOptIn();
         return List.of(new TestResourceEntry(ClinicalHeatmapAuthorizationStubResource.class,
-                Map.of("visual-search-controls", "true", "visual-search-summary-controls", "true")));
+                Map.of("visual-search-controls", "true", "visual-search-summary-controls", "true",
+                        "standard-scanning-controls", "true", "standard-scanning-summary-controls", "true",
+                        "sustained-fixation-controls", "true")));
     }
 
     @Override public Map<String, String> getConfigOverrides() {

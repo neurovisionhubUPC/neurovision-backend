@@ -1,0 +1,247 @@
+package com.neurovision.rehab.analytics.infrastructure.persistence.mongodb;
+
+import static org.junit.jupiter.api.Assertions.*;
+import com.mongodb.*;
+import com.neurovision.rehab.analytics.application.ports.out.persistence.StandardScanningTrialResultStore.*;
+import com.neurovision.rehab.analytics.domain.model.valueobjects.*;
+import io.smallrye.mutiny.Uni;
+import java.lang.reflect.*;
+import java.time.Duration;
+import java.util.*;
+import org.bson.Document;
+import org.junit.jupiter.api.Test;
+import org.reactivestreams.*;
+
+class MongoStandardScanningTrialResultStoreAdapterTest {
+    private static final UUID SESSION = new UUID(0, 1), CONFIGURATION = new UUID(0, 2);
+    private static final Duration WAIT = Duration.ofSeconds(2);
+    Stored stored(String trial, VisualSearchTrialResult.Outcome outcome) {
+        return new Stored(new StandardScanningTrialContext(SESSION, CONFIGURATION, 3, 500, 3000),
+                new StandardScanningTrialResult(1, SESSION, trial, outcome,
+                        outcome == VisualSearchTrialResult.Outcome.TIMEOUT ? 3000 : 1000,
+                        outcome == VisualSearchTrialResult.Outcome.SUCCESS ? 500L : null,
+                        VisualSearchTrialResult.DataOrigin.SYNTHETIC));
+    }
+    MongoStandardScanningTrialResultStoreAdapter adapter(Fake fake) {
+        return new MongoStandardScanningTrialResultStoreAdapter(fake, "standard_scanning_trial_results_v1", Duration.ofMillis(100));
+    }
+    final class Fake implements MongoStandardScanningTrialResultStoreAdapter.RawOperations {
+        int reads, writes; Document key, command, found;
+        Uni<Document> acknowledgement = Uni.createFrom().item(new Document("ok", 1.0).append("n", 1));
+        public Uni<Document> find(Document identity) { reads++; key = identity; return Uni.createFrom().item(found); }
+        public Uni<Document> insert(Document value) { writes++; command = value; return acknowledgement; }
+    }
+
+    @Test void deferredInsertUsesOneStableIdentityAndExplicitDurableConcernWithoutDdl() {
+        var fake = new Fake(); var candidate = stored("opaque /:$ trial ", VisualSearchTrialResult.Outcome.SUCCESS);
+        var uni = adapter(fake).insertIfAbsent(candidate);
+        assertEquals(0, fake.writes);
+        var result = uni.await().atMost(WAIT);
+        assertTrue(result.created()); assertEquals(candidate, result.stored());
+        assertEquals(1, fake.writes); assertEquals(0, fake.reads);
+        assertEquals(Set.of("insert", "documents", "ordered", "writeConcern"), fake.command.keySet());
+        assertEquals("standard_scanning_trial_results_v1", fake.command.getString("insert")); assertEquals(true, fake.command.getBoolean("ordered"));
+        var concern = fake.command.get("writeConcern", Document.class);
+        assertEquals("majority", concern.getString("w")); assertEquals(true, concern.getBoolean("j"));
+        var rows = fake.command.getList("documents", Document.class); assertEquals(1, rows.size());
+        assertEquals(new Document("therapySessionId", SESSION.toString()).append("trialId", candidate.result().trialId()), rows.getFirst().get("_id"));
+        assertEquals(List.of("therapySessionId", "trialId"), new ArrayList<>(rows.getFirst().get("_id", Document.class).keySet()));
+    }
+
+    @Test void findRoundTripsAllOutcomesAndPreservesOpaqueIdentityWithoutCoercions() {
+        for (var outcome : VisualSearchTrialResult.Outcome.values()) {
+            var fake = new Fake(); var candidate = stored(" a|b/\u0000é ", outcome);
+            fake.found = MongoStandardScanningTrialResultStoreAdapter.document(candidate);
+            var result = adapter(fake).find(SESSION, candidate.result().trialId()).await().atMost(WAIT);
+            assertEquals(Optional.of(candidate), result); assertEquals(1, fake.reads); assertEquals(0, fake.writes);
+            assertEquals(candidate.result().trialId(), fake.key.getString("trialId"));
+            assertEquals("StoredStandardScanningTrial[redacted]", result.orElseThrow().toString());
+        }
+        var fake = new Fake(); assertEquals(Optional.empty(), adapter(fake).find(SESSION, "missing").await().atMost(WAIT));
+        assertEquals(1, fake.reads); assertEquals(0, fake.writes);
+    }
+
+    @Test void duplicateReadsExactlyOneWinnerWithoutOverwritingOrSecondInsert() {
+        for (var outcome : VisualSearchTrialResult.Outcome.values()) {
+            var fake = new Fake(); var candidate = stored("same", VisualSearchTrialResult.Outcome.SUCCESS);
+            var winner = stored("same", outcome);
+            fake.found = MongoStandardScanningTrialResultStoreAdapter.document(winner);
+            var original = snapshot(fake.found);
+            fake.acknowledgement = Uni.createFrom().item(duplicate());
+            var result = adapter(fake).insertIfAbsent(candidate).await().atMost(WAIT);
+            assertFalse(result.created()); assertEquals(winner, result.stored());
+            assertEquals(1, fake.writes); assertEquals(1, fake.reads);
+            assertTrue(original.equals(snapshot(fake.found)), "Stored fixture changed");
+        }
+    }
+
+    @Test void missingOrCorruptDuplicateWinnerFailsRatherThanClaimingCreatedOrAbsent() {
+        for (Document found : Arrays.asList(null, new Document(),
+                MongoStandardScanningTrialResultStoreAdapter.document(stored("another", VisualSearchTrialResult.Outcome.SUCCESS)))) {
+            var fake = new Fake(); fake.found = found; fake.acknowledgement = Uni.createFrom().item(duplicate());
+            safeFailure(() -> adapter(fake).insertIfAbsent(stored("same", VisualSearchTrialResult.Outcome.SUCCESS)).await().atMost(WAIT));
+            assertEquals(1, fake.writes); assertEquals(1, fake.reads);
+        }
+    }
+
+    @Test void malformedAcknowledgementsAndWriteConcernErrorsNeverTriggerRetryOrWinnerRead() {
+        var bad = new ArrayList<Document>();
+        bad.add(null); bad.add(new Document()); bad.add(new Document("ok", 0).append("n", 1));
+        bad.add(new Document("ok", 1).append("n", 0)); bad.add(new Document("ok", 1).append("n", 2));
+        bad.add(new Document("ok", 1).append("n", 1.0));
+        bad.add(new Document("ok", 1).append("n", 1).append("writeConcernError", new Document("code", 64)));
+        bad.add(new Document("ok", 1).append("n", 1).append("writeErrors", List.of(new Document("code", 11000).append("index", 0))));
+        bad.add(new Document("ok", 1).append("n", 0).append("writeErrors", List.of(new Document("code", 121).append("index", 0))));
+        bad.add(new Document("ok", 1).append("n", 0).append("writeErrors", List.of(new Document("code", 11000).append("index", 1))));
+        for (Document reply : bad) {
+            var fake = new Fake(); fake.acknowledgement = Uni.createFrom().item(reply);
+            safeFailure(() -> adapter(fake).insertIfAbsent(stored("trial", VisualSearchTrialResult.Outcome.SUCCESS)).await().atMost(WAIT));
+            assertEquals(1, fake.writes); assertEquals(0, fake.reads);
+        }
+    }
+
+    @Test void corruptDocumentsFailClosedInsteadOfReturningEmptyOrChangingState() {
+        for (int kind = 0; kind < 8; kind++) {
+            var fake = new Fake(); var doc = MongoStandardScanningTrialResultStoreAdapter.document(stored("trial", VisualSearchTrialResult.Outcome.SUCCESS));
+            switch (kind) {
+                case 0 -> doc.put("storageSchemaVersion", 2);
+                case 1 -> doc.get("_id", Document.class).put("therapySessionId", new UUID(0, 99).toString());
+                case 2 -> doc.get("context", Document.class).put("configurationVersion", 3.0);
+                case 3 -> doc.get("result", Document.class).put("outcome", "UNKNOWN_PRIVATE_VALUE");
+                case 4 -> doc.get("result", Document.class).put("confirmedDwellMs", null);
+                case 5 -> doc.get("context", Document.class).put("minimumFixationMs", 2000L);
+                case 6 -> doc.put("extra", "private");
+                default -> doc.get("context", Document.class).put("configurationId", "1-1-1-1-1");
+            }
+            fake.found = doc; var original = snapshot(doc);
+            safeFailure(() -> adapter(fake).find(SESSION, "trial").await().atMost(WAIT));
+            assertTrue(original.equals(snapshot(doc)), "Rejected fixture changed"); assertEquals(0, fake.writes);
+        }
+    }
+
+    @Test void timeoutAndTransportFailureDoNotRetryAndInvalidArgumentsDoNotDispatch() {
+        for (boolean timeout : List.of(false, true)) {
+            var fake = new Fake(); fake.acknowledgement = timeout ? Uni.createFrom().nothing()
+                    : Uni.createFrom().failure(new IllegalStateException("private-upstream"));
+            safeFailure(() -> adapter(fake).insertIfAbsent(stored("trial", VisualSearchTrialResult.Outcome.SUCCESS)).await().atMost(WAIT));
+            assertEquals(1, fake.writes); assertEquals(0, fake.reads);
+        }
+        var fake = new Fake();
+        safeFailure(() -> adapter(fake).find(null, "trial").await().atMost(WAIT));
+        safeFailure(() -> adapter(fake).find(SESSION, " ").await().atMost(WAIT));
+        safeFailure(() -> adapter(fake).insertIfAbsent(null).await().atMost(WAIT));
+        assertEquals(0, fake.writes); assertEquals(0, fake.reads);
+    }
+
+    @Test void productionDriverViewsUsePrimaryMajorityTimeoutAndRawInsertCommand() {
+        var calls = new ArrayList<String>(); final Document[] command = {null};
+        @SuppressWarnings("unchecked") var find = proxy(com.mongodb.reactivestreams.client.FindPublisher.class, (o,m,a) -> {
+            assertEquals("first", m.getName()); calls.add("first"); return publisher(null);
+        });
+        @SuppressWarnings("unchecked") var collection = proxy(com.mongodb.reactivestreams.client.MongoCollection.class, (o,m,a) -> {
+            switch (m.getName()) {
+                case "withReadPreference" -> assertEquals(ReadPreference.primary(), a[0]);
+                case "withReadConcern" -> assertEquals(ReadConcern.MAJORITY, a[0]);
+                case "withTimeout" -> { assertEquals(100L, a[0]); calls.add("read_timeout"); }
+                case "find" -> { calls.add("find"); return find; }
+                default -> throw new AssertionError("Unexpected collection operation");
+            }
+            return o;
+        });
+        var db = proxy(com.mongodb.reactivestreams.client.MongoDatabase.class, (o,m,a) -> {
+            if (m.getName().equals("getCollection")) { assertEquals("results", a[0]); return collection; }
+            if (m.getName().equals("withTimeout")) { assertEquals(100L, a[0]); calls.add("write_timeout"); return o; }
+            if (m.getName().equals("runCommand")) {
+                assertEquals(ReadPreference.primary(), a[1]); command[0] = (Document) a[0]; calls.add("raw_insert");
+                return publisher(new Document("ok", 1).append("n", 1));
+            }
+            throw new AssertionError("Unexpected database operation");
+        });
+        var nativeClient = proxy(com.mongodb.reactivestreams.client.MongoClient.class, (o,m,a) -> {
+            assertEquals("getDatabase", m.getName()); assertEquals("synthetic", a[0]); return db;
+        });
+        var client = proxy(io.quarkus.mongodb.reactive.ReactiveMongoClient.class, (o,m,a) -> {
+            assertEquals("unwrap", m.getName()); return nativeClient;
+        });
+        @SuppressWarnings("unchecked") jakarta.enterprise.inject.Instance<io.quarkus.mongodb.reactive.ReactiveMongoClient> clients =
+                proxy(jakarta.enterprise.inject.Instance.class, (o,m,a) -> { assertEquals("get", m.getName()); return client; });
+        var adapter = new MongoStandardScanningTrialResultStoreAdapter(clients, "synthetic", "results", 100);
+        assertTrue(calls.isEmpty());
+        assertTrue(adapter.find(SESSION, "trial").await().atMost(WAIT).isEmpty());
+        assertTrue(adapter.insertIfAbsent(stored("trial", VisualSearchTrialResult.Outcome.SUCCESS)).await().atMost(WAIT).created());
+        assertEquals(List.of("read_timeout", "find", "first", "write_timeout", "raw_insert"), calls);
+        assertEquals("majority", command[0].get("writeConcern", Document.class).getString("w"));
+        assertEquals(true, command[0].get("writeConcern", Document.class).getBoolean("j"));
+    }
+
+    @Test void storedSchemaKeepsScanningNamesAndRejectsVisualSearchDocuments() {
+        var candidate = stored("trial", VisualSearchTrialResult.Outcome.SUCCESS);
+        var row = MongoStandardScanningTrialResultStoreAdapter.document(candidate);
+        assertEquals(Set.of("configurationId", "configurationVersion", "minimumFixationMs", "maximumStimulusDurationMs"),
+                row.get("context", Document.class).keySet());
+        assertEquals(Set.of("schemaVersion", "outcome", "localizationDurationMs", "confirmedDwellMs", "dataOrigin"),
+                row.get("result", Document.class).keySet());
+        assertEquals(3000L, row.get("context", Document.class).get("maximumStimulusDurationMs"));
+        assertEquals(1000L, row.get("result", Document.class).get("localizationDurationMs"));
+        for (boolean context : List.of(false, true)) {
+            var fake = new Fake(); fake.found = MongoStandardScanningTrialResultStoreAdapter.document(candidate);
+            var section = fake.found.get(context ? "context" : "result", Document.class);
+            String field = context ? "maximumStimulusDurationMs" : "localizationDurationMs";
+            section.put(context ? "maximumSearchTimeMs" : "searchDurationMs", section.remove(field));
+            safeFailure(() -> adapter(fake).find(SESSION, "trial").await().atMost(WAIT));
+            assertEquals(1, fake.reads); assertEquals(0, fake.writes);
+        }
+    }
+
+    @Test void invalidSettingsFailBeforeDriverUse() {
+        for (long milliseconds : new long[]{99, 10001}) {
+            assertThrows(IllegalArgumentException.class, () -> new MongoStandardScanningTrialResultStoreAdapter(
+                    new Fake(), "results", Duration.ofMillis(milliseconds)));
+        }
+        assertThrows(IllegalArgumentException.class, () -> new MongoStandardScanningTrialResultStoreAdapter(
+                new Fake(), " ", Duration.ofMillis(100)));
+    }
+
+    private Document duplicate() { return new Document("ok", 1).append("n", 0)
+            .append("writeErrors", List.of(new Document("index", 0).append("code", 11000).append("errmsg", "private"))); }
+    private String snapshot(Document row) {
+        return row.toJson(org.bson.json.JsonWriterSettings.builder().outputMode(org.bson.json.JsonMode.EXTENDED).build());
+    }
+    private void safeFailure(org.junit.jupiter.api.function.Executable operation) {
+        var failure = assertThrows(IllegalStateException.class, operation);
+        assertEquals("Standard Scanning result storage unavailable", failure.getMessage()); assertNull(failure.getCause());
+    }
+    @SuppressWarnings("unchecked") private static <T> T proxy(Class<T> type, InvocationHandler handler) {
+        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, handler);
+    }
+    private static <T> Publisher<T> publisher(T item) {
+        return subscriber -> subscriber.onSubscribe(new Subscription() {
+            boolean done;
+            public void request(long n) { if (!done) { done = true; if (item != null) subscriber.onNext(item); subscriber.onComplete(); } }
+            public void cancel() { done = true; }
+        });
+    }
+    @Test void servicePreservesUncertainPersistedWriteAndConfirmsAfterClosure() {
+        var candidate = stored("same", VisualSearchTrialResult.Outcome.SUCCESS);
+        Document[] saved = {null}; int[] reads = {0}, writes = {0}; boolean[] mayInsert = {true};
+        var operations = new MongoStandardScanningTrialResultStoreAdapter.RawOperations() {
+            public Uni<Document> find(Document identity) { reads[0]++; return Uni.createFrom().item(saved[0]); }
+            public Uni<Document> insert(Document command) {
+                writes[0]++; saved[0] = command.getList("documents", Document.class).getFirst();
+                return Uni.createFrom().failure(new IllegalStateException("synthetic acknowledgement lost"));
+            }
+        };
+        var store = new MongoStandardScanningTrialResultStoreAdapter(operations, "results", Duration.ofMillis(100));
+        var service = new com.neurovision.rehab.analytics.application.internal.commandservices.ReceiveStandardScanningTrialResultService(
+            (session, token) -> new com.neurovision.rehab.analytics.application.ports.out.authorization.StandardScanningTrialAuthorizationPort.Decision(
+                com.neurovision.rehab.analytics.application.ports.out.authorization.StandardScanningTrialAuthorizationPort.Permission.PERMITTED,
+                candidate.context(), mayInsert[0]), store);
+        assertEquals(com.neurovision.rehab.analytics.application.internal.commandservices.ReceiveStandardScanningTrialResultService.Status.WRITE_OUTCOME_UNKNOWN,
+                service.receive(candidate.result(), "synthetic-token").await().atMost(WAIT));
+        assertEquals(1, reads[0]); assertEquals(1, writes[0]); var before = snapshot(saved[0]);
+        mayInsert[0] = false;
+        assertEquals(com.neurovision.rehab.analytics.application.internal.commandservices.ReceiveStandardScanningTrialResultService.Status.ALREADY_STORED,
+                service.receive(candidate.result(), "synthetic-token").await().atMost(WAIT));
+        assertEquals(2, reads[0]); assertEquals(1, writes[0]); assertEquals(before, snapshot(saved[0]));
+    }
+}

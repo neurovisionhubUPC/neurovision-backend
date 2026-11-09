@@ -12,7 +12,11 @@ public class VisualSearchTrialStoreMongoProfile implements QuarkusTestProfile {
             throw new IllegalStateException("Explicit Visual Search Mongo profile and execution opt-in required");
         for (String key : List.of("quarkus.mongodb.connection-string", "quarkus.mongodb.database",
                 "quarkus.mongodb.active", "analytics.visual-search.results-collection",
-                "analytics.visual-search.persistence-timeout-ms", "quarkus.oidc.enabled",
+                "analytics.visual-search.persistence-timeout-ms", "analytics.standard-scanning.results-collection",
+                "analytics.sustained-fixation.results-collection", "analytics.sustained-fixation.persistence-timeout-ms",
+                "analytics.compensatory-saccade.results-collection", "analytics.compensatory-saccade.persistence-timeout-ms",
+                "analytics.systematic-exploration.results-collection", "analytics.systematic-exploration.persistence-timeout-ms",
+                "analytics.standard-scanning.persistence-timeout-ms", "quarkus.oidc.enabled",
                 "quarkus.oidc.auth-server-url", "mp.messaging.incoming.analytics-telemetry.enabled",
                 "quarkus.http.host", "quarkus.http.test-host", "quarkus.http.test-port"))
             if (System.getProperty(key) != null)
@@ -37,6 +41,14 @@ public class VisualSearchTrialStoreMongoProfile implements QuarkusTestProfile {
                 Map.entry("mp.messaging.incoming.analytics-telemetry.enabled", "false"),
                 Map.entry("analytics.visual-search.results-collection", "visual_search_trial_results_it"),
                 Map.entry("analytics.visual-search.persistence-timeout-ms", "5000"),
+                Map.entry("analytics.standard-scanning.results-collection", "standard_scanning_trial_results_it"),
+                Map.entry("analytics.standard-scanning.persistence-timeout-ms", "5000"),
+                Map.entry("analytics.sustained-fixation.results-collection", "sustained_fixation_trial_results_it"),
+                Map.entry("analytics.sustained-fixation.persistence-timeout-ms", "5000"),
+                Map.entry("analytics.compensatory-saccade.results-collection", "compensatory_saccade_trial_results_it"),
+                Map.entry("analytics.compensatory-saccade.persistence-timeout-ms", "5000"),
+                Map.entry("analytics.systematic-exploration.results-collection", "systematic_exploration_trial_results_it"),
+                Map.entry("analytics.systematic-exploration.persistence-timeout-ms", "5000"),
                 Map.entry("quarkus.http.host", "127.0.0.1"),
                 Map.entry("quarkus.http.test-host", "127.0.0.1"),
                 Map.entry("quarkus.http.test-port", "0"),
