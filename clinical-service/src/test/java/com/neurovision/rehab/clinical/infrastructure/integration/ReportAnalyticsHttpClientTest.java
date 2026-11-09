@@ -134,6 +134,43 @@ class ReportAnalyticsHttpClientTest {
         } finally { Thread.interrupted(); }
     }
 
+    @Test void standardScanningUsesDedicatedFixedQueryOriginalTokenAndSmallBound() {
+        var client = new ReportAnalyticsHttpClient(BASE,250,JSON);
+        for (var origin : com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.values()) {
+            var request=client.standardScanningRequest(SESSION,origin,"original-token");
+            assertEquals(BASE+"/api/v1/analytics/sessions/"+SESSION+"/standard-scanning/summary?dataOrigin="+origin.name(),request.uri().toString());
+            assertEquals("Bearer original-token",request.headers().firstValue("Authorization").orElseThrow());
+            assertEquals("GET",request.method()); assertEquals(Duration.ofMillis(250),request.timeout().orElseThrow());
+            assertTrue(request.bodyPublisher().isEmpty());
+        }
+        assertThrows(IllegalStateException.class,()->client.standardScanningRequest(SESSION,null,"token"));
+        assertThrows(IllegalStateException.class,()->client.standardScanningRequest(null,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.SYNTHETIC,"token"));
+        assertThrows(IllegalStateException.class,()->client.standardScanningRequest(SESSION,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.SYNTHETIC,"bad token"));
+    }
+    @Test void standardScanningStrictWireFailuresBoundTimeoutAndInterrupt() throws Exception {
+        var origin=com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.SYNTHETIC;
+        for (int status:List.of(201,204,301,302,307,308,400,401,403,404,409,429,500,503))
+            assertThrows(IllegalStateException.class,()->client(status,"private").getStandardScanning(SESSION,origin,"token"));
+        for (String body:List.of("{\"x\":1,\"x\":2}","{} {}","[]","null","{broken"," ".repeat(2048)+"{}"))
+            assertThrows(IllegalStateException.class,()->client(200,body).getStandardScanning(SESSION,origin,"token"));
+        assertTrue(client(200,"{}").getStandardScanning(SESSION,origin,"token").isObject());
+        var bounded = new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->{
+            var body=h.apply(null); var subscription=new Subscription(); body.onSubscribe(subscription);
+            body.onNext(List.of(ByteBuffer.wrap(new byte[2049]))); assertTrue(subscription.cancelled);
+            assertThrows(ExecutionException.class,()->body.getBody().toCompletableFuture().get());
+            return CompletableFuture.failedFuture(new IllegalStateException());
+        });
+        assertThrows(IllegalStateException.class,()->bounded.getStandardScanning(SESSION,origin,"token"));
+        var pending=new CompletableFuture<HttpResponse<byte[]>>();
+        var timeout=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->pending);
+        assertThrows(IllegalStateException.class,()->timeout.getStandardScanning(SESSION,origin,"token")); assertTrue(pending.isCancelled());
+        var interrupted=new CompletableFuture<HttpResponse<byte[]>>(); var client=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->interrupted);
+        try {
+            Thread.currentThread().interrupt(); assertThrows(IllegalStateException.class,()->client.getStandardScanning(SESSION,origin,"token"));
+            assertTrue(Thread.currentThread().isInterrupted()); assertTrue(interrupted.isCancelled());
+        } finally { Thread.interrupted(); }
+    }
+
     static ReportAnalyticsHttpClient client(int status,String body) {
         return new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->CompletableFuture.completedFuture(new Response(status,body.getBytes(StandardCharsets.UTF_8))));
     }
@@ -150,4 +187,116 @@ class ReportAnalyticsHttpClientTest {
         public URI uri() {return BASE;}
         public HttpClient.Version version() {return HttpClient.Version.HTTP_1_1;}
     }
+
+    @Test void sustainedFixationUsesDedicatedFixedQueryOriginalTokenAndSmallBound() {
+        var client = new ReportAnalyticsHttpClient(BASE,250,JSON);
+        for (var origin : com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin.values()) {
+            var request=client.sustainedFixationRequest(SESSION,origin,"original-token");
+            assertEquals(BASE+"/api/v1/analytics/sessions/"+SESSION+"/sustained-fixation/summary?dataOrigin="+origin.name(),request.uri().toString());
+            assertEquals("Bearer original-token",request.headers().firstValue("Authorization").orElseThrow());
+            assertEquals("GET",request.method()); assertEquals(Duration.ofMillis(250),request.timeout().orElseThrow());
+            assertTrue(request.bodyPublisher().isEmpty());
+        }
+        assertThrows(IllegalStateException.class,()->client.sustainedFixationRequest(SESSION,null,"token"));
+        assertThrows(IllegalStateException.class,()->client.sustainedFixationRequest(null,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin.SYNTHETIC,"token"));
+        assertThrows(IllegalStateException.class,()->client.sustainedFixationRequest(SESSION,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin.SYNTHETIC,"bad token"));
+    }
+    @Test void sustainedFixationStrictWireFailuresBoundTimeoutAndInterrupt() throws Exception {
+        var origin=com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin.SYNTHETIC;
+        for (int status:List.of(201,204,301,302,307,308,400,401,403,404,409,429,500,503))
+            assertThrows(IllegalStateException.class,()->client(status,"private").getSustainedFixation(SESSION,origin,"token"));
+        for (String body:List.of("{\"x\":1,\"x\":2}","{} {}","[]","null","{broken"," ".repeat(2048)+"{}"))
+            assertThrows(IllegalStateException.class,()->client(200,body).getSustainedFixation(SESSION,origin,"token"));
+        assertTrue(client(200,"{}").getSustainedFixation(SESSION,origin,"token").isObject());
+        var bounded = new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->{
+            var body=h.apply(null); var subscription=new Subscription(); body.onSubscribe(subscription);
+            body.onNext(List.of(ByteBuffer.wrap(new byte[2049]))); assertTrue(subscription.cancelled);
+            assertThrows(ExecutionException.class,()->body.getBody().toCompletableFuture().get());
+            return CompletableFuture.failedFuture(new IllegalStateException());
+        });
+        assertThrows(IllegalStateException.class,()->bounded.getSustainedFixation(SESSION,origin,"token"));
+        var pending=new CompletableFuture<HttpResponse<byte[]>>();
+        var timeout=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->pending);
+        assertThrows(IllegalStateException.class,()->timeout.getSustainedFixation(SESSION,origin,"token")); assertTrue(pending.isCancelled());
+        var interrupted=new CompletableFuture<HttpResponse<byte[]>>(); var client=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->interrupted);
+        try {
+            Thread.currentThread().interrupt(); assertThrows(IllegalStateException.class,()->client.getSustainedFixation(SESSION,origin,"token"));
+            assertTrue(Thread.currentThread().isInterrupted()); assertTrue(interrupted.isCancelled());
+        } finally { Thread.interrupted(); }
+    }
+
+    @Test void compensatorySaccadeUsesDedicatedFixedQueryOriginalTokenAndSmallBound() {
+        var client = new ReportAnalyticsHttpClient(BASE,250,JSON);
+        for (var origin : com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin.values()) {
+            var request=client.compensatorySaccadeRequest(SESSION,origin,"original-token");
+            assertEquals(BASE+"/api/v1/analytics/sessions/"+SESSION+"/compensatory-saccade/summary?dataOrigin="+origin.name(),request.uri().toString());
+            assertEquals("Bearer original-token",request.headers().firstValue("Authorization").orElseThrow());
+            assertEquals("GET",request.method()); assertEquals(Duration.ofMillis(250),request.timeout().orElseThrow());
+            assertTrue(request.bodyPublisher().isEmpty());
+        }
+        assertThrows(IllegalStateException.class,()->client.compensatorySaccadeRequest(SESSION,null,"token"));
+        assertThrows(IllegalStateException.class,()->client.compensatorySaccadeRequest(null,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin.SYNTHETIC,"token"));
+        assertThrows(IllegalStateException.class,()->client.compensatorySaccadeRequest(SESSION,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin.SYNTHETIC,"bad token"));
+    }
+    @Test void compensatorySaccadeStrictWireFailuresBoundTimeoutAndInterrupt() throws Exception {
+        var origin=com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin.SYNTHETIC;
+        for (int status:List.of(201,204,301,302,307,308,400,401,403,404,409,429,500,503))
+            assertThrows(IllegalStateException.class,()->client(status,"private").getCompensatorySaccade(SESSION,origin,"token"));
+        for (String body:List.of("{\"x\":1,\"x\":2}","{} {}","[]","null","{broken"," ".repeat(2048)+"{}"))
+            assertThrows(IllegalStateException.class,()->client(200,body).getCompensatorySaccade(SESSION,origin,"token"));
+        assertTrue(client(200,"{}").getCompensatorySaccade(SESSION,origin,"token").isObject());
+        var bounded = new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->{
+            var body=h.apply(null); var subscription=new Subscription(); body.onSubscribe(subscription);
+            body.onNext(List.of(ByteBuffer.wrap(new byte[2049]))); assertTrue(subscription.cancelled);
+            assertThrows(ExecutionException.class,()->body.getBody().toCompletableFuture().get());
+            return CompletableFuture.failedFuture(new IllegalStateException());
+        });
+        assertThrows(IllegalStateException.class,()->bounded.getCompensatorySaccade(SESSION,origin,"token"));
+        var pending=new CompletableFuture<HttpResponse<byte[]>>();
+        var timeout=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->pending);
+        assertThrows(IllegalStateException.class,()->timeout.getCompensatorySaccade(SESSION,origin,"token")); assertTrue(pending.isCancelled());
+        var interrupted=new CompletableFuture<HttpResponse<byte[]>>(); var client=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->interrupted);
+        try {
+            Thread.currentThread().interrupt(); assertThrows(IllegalStateException.class,()->client.getCompensatorySaccade(SESSION,origin,"token"));
+            assertTrue(Thread.currentThread().isInterrupted()); assertTrue(interrupted.isCancelled());
+        } finally { Thread.interrupted(); }
+    }
+
+    @Test void systematicExplorationUsesDedicatedFixedQueryOriginalTokenAndExistingSummaryBound() {
+        var client = new ReportAnalyticsHttpClient(BASE,250,JSON);
+        for (var origin : com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.values()) {
+            var request=client.systematicExplorationRequest(SESSION,origin,"original-token");
+            assertEquals(BASE+"/api/v1/analytics/sessions/"+SESSION+"/systematic-exploration/summary?dataOrigin="+origin.name(),request.uri().toString());
+            assertEquals("Bearer original-token",request.headers().firstValue("Authorization").orElseThrow());
+            assertEquals("GET",request.method()); assertEquals(Duration.ofMillis(250),request.timeout().orElseThrow());
+            assertTrue(request.bodyPublisher().isEmpty());
+        }
+        assertThrows(IllegalStateException.class,()->client.systematicExplorationRequest(SESSION,null,"token"));
+        assertThrows(IllegalStateException.class,()->client.systematicExplorationRequest(null,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.SYNTHETIC,"token"));
+        assertThrows(IllegalStateException.class,()->client.systematicExplorationRequest(SESSION,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.SYNTHETIC,"bad token"));
+    }
+    @Test void systematicExplorationStrictWireFailuresBoundTimeoutAndInterrupt() throws Exception {
+        var origin=com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.SYNTHETIC;
+        for (int status:List.of(201,204,301,302,307,308,400,401,403,404,409,429,500,503))
+            assertThrows(IllegalStateException.class,()->client(status,"private").getSystematicExploration(SESSION,origin,"token"));
+        for (String body:List.of("{\"x\":1,\"x\":2}","{} {}","[]","null","{broken"," ".repeat(262144)+"{}"))
+            assertThrows(IllegalStateException.class,()->client(200,body).getSystematicExploration(SESSION,origin,"token"));
+        assertTrue(client(200,"{}").getSystematicExploration(SESSION,origin,"token").isObject());
+        var bounded = new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->{
+            var body=h.apply(null); var subscription=new Subscription(); body.onSubscribe(subscription);
+            body.onNext(List.of(ByteBuffer.wrap(new byte[262145]))); assertTrue(subscription.cancelled);
+            assertThrows(ExecutionException.class,()->body.getBody().toCompletableFuture().get());
+            return CompletableFuture.failedFuture(new IllegalStateException());
+        });
+        assertThrows(IllegalStateException.class,()->bounded.getSystematicExploration(SESSION,origin,"token"));
+        var pending=new CompletableFuture<HttpResponse<byte[]>>();
+        var timeout=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->pending);
+        assertThrows(IllegalStateException.class,()->timeout.getSystematicExploration(SESSION,origin,"token")); assertTrue(pending.isCancelled());
+        var interrupted=new CompletableFuture<HttpResponse<byte[]>>(); var client=new ReportAnalyticsHttpClient(BASE,100,JSON,(r,h)->interrupted);
+        try {
+            Thread.currentThread().interrupt(); assertThrows(IllegalStateException.class,()->client.getSystematicExploration(SESSION,origin,"token"));
+            assertTrue(Thread.currentThread().isInterrupted()); assertTrue(interrupted.isCancelled());
+        } finally { Thread.interrupted(); }
+    }
+
 }

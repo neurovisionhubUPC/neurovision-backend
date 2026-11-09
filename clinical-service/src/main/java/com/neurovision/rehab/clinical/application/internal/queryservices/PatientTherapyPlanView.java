@@ -6,7 +6,7 @@ import java.util.List;
 
 /** Current assigned plan facts; session admission and quota checks remain authoritative at start. */
 public record PatientTherapyPlanView(
-        TherapyPlan plan, List<TherapeuticExerciseConfiguration> effectiveConfigurations) {
+        TherapyPlan plan, List<TherapeuticExerciseConfiguration> effectiveConfigurations, PatientDailyAvailability dailyAvailability) {
     public PatientTherapyPlanView {
         effectiveConfigurations = List.copyOf(effectiveConfigurations);
     }

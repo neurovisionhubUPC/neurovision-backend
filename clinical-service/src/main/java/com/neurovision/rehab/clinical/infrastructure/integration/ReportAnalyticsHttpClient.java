@@ -83,6 +83,50 @@ public final class ReportAnalyticsHttpClient {
     public JsonNode getVisualSearch(UUID session, Origin originSelection, String originalAccessToken) {
         return get(visualSearchRequest(session,originSelection,originalAccessToken),2048,json.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS));
     }
+    HttpRequest standardScanningRequest(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin originSelection, String token) {
+        try {
+            requireToken(token); Objects.requireNonNull(session); Objects.requireNonNull(originSelection);
+            String path = "/api/v1/analytics/sessions/" + session + "/standard-scanning/summary?dataOrigin=" + originSelection.name();
+            return HttpRequest.newBuilder(origin.resolve(path)).timeout(timeout)
+                    .header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build();
+        } catch (RuntimeException invalid) { throw unavailable(); }
+    }
+    public JsonNode getStandardScanning(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin originSelection, String originalAccessToken) {
+        return get(standardScanningRequest(session,originSelection,originalAccessToken),2048,json.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS));
+    }
+    HttpRequest sustainedFixationRequest(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin originSelection, String token) {
+        try {
+            requireToken(token); Objects.requireNonNull(session); Objects.requireNonNull(originSelection);
+            String path = "/api/v1/analytics/sessions/" + session + "/sustained-fixation/summary?dataOrigin=" + originSelection.name();
+            return HttpRequest.newBuilder(origin.resolve(path)).timeout(timeout)
+                    .header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build();
+        } catch (RuntimeException invalid) { throw unavailable(); }
+    }
+    public JsonNode getSustainedFixation(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin originSelection, String originalAccessToken) {
+        return get(sustainedFixationRequest(session,originSelection,originalAccessToken),2048,json.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS));
+    }
+    HttpRequest compensatorySaccadeRequest(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin originSelection, String token) {
+        try {
+            requireToken(token); Objects.requireNonNull(session); Objects.requireNonNull(originSelection);
+            String path = "/api/v1/analytics/sessions/" + session + "/compensatory-saccade/summary?dataOrigin=" + originSelection.name();
+            return HttpRequest.newBuilder(origin.resolve(path)).timeout(timeout)
+                    .header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build();
+        } catch (RuntimeException invalid) { throw unavailable(); }
+    }
+    public JsonNode getCompensatorySaccade(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin originSelection, String originalAccessToken) {
+        return get(compensatorySaccadeRequest(session,originSelection,originalAccessToken),2048,json.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS));
+    }
+    HttpRequest systematicExplorationRequest(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin originSelection, String token) {
+        try {
+            requireToken(token); Objects.requireNonNull(session); Objects.requireNonNull(originSelection);
+            String path = "/api/v1/analytics/sessions/" + session + "/systematic-exploration/summary?dataOrigin=" + originSelection.name();
+            return HttpRequest.newBuilder(origin.resolve(path)).timeout(timeout)
+                    .header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build();
+        } catch (RuntimeException invalid) { throw unavailable(); }
+    }
+    public JsonNode getSystematicExploration(UUID session, com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin originSelection, String originalAccessToken) {
+        return get(systematicExplorationRequest(session,originSelection,originalAccessToken),Resource.SUMMARY.maximumBytes(),json.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS));
+    }
     public JsonNode get(UUID session, UUID stream, Resource resource, String originalAccessToken) {
         return get(request(session,stream,resource,originalAccessToken),resource.maximumBytes(),json);
     }

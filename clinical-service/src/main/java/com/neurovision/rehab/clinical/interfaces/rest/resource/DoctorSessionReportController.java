@@ -33,19 +33,41 @@ public class DoctorSessionReportController {
     /** Source-compatible omitted-selection invocation; only the overload below is a REST route. */
     public Response preview(String patient, String session) { return preview(patient,session,null); }
 
+    public Response preview(String patient, String session, String origin) { return preview(patient,session,origin,null); }
+
+    public Response preview(String patient, String session, String visualOrigin, String scanningOrigin) {
+        return preview(patient,session,visualOrigin,scanningOrigin,null);
+    }
+
+    public Response preview(String patient, String session, String visualOrigin, String scanningOrigin, String fixationOrigin) {
+        return preview(patient,session,visualOrigin,scanningOrigin,fixationOrigin,null);
+    }
+
+    public Response preview(String patient, String session, String visualOrigin, String scanningOrigin, String fixationOrigin, String saccadeOrigin) {
+        return preview(patient,session,visualOrigin,scanningOrigin,fixationOrigin,saccadeOrigin,null);
+    }
+
     @GET @RolesAllowed("DOCTOR")
     @Operation(summary = "Preview an owned completed session report",
             description = "Requires DOCTOR without PATIENT/ADMIN, authorship and current ACTIVE assignment. "
                     + "Read-only bounded evidence and current identity availability; no PDF, stored report or clinical interpretation. "
+                    + "Optional sustainedFixationDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen SUSTAINED_TARGET_FIXATION. "
+                    + "Optional systematicExplorationDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen SYSTEMATIC_EXPLORATION. "
+                    + "Optional compensatorySaccadeDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen COMPENSATORY_SACCADE. "
+                    + "Optional standardScanningDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen STANDARD_SCANNING; selections are mutually exclusive. "
                     + "Optional visualSearchDataOrigin=SYNTHETIC|PRODUCER_REPORTED requests observed Visual Search metrics only for "
                     + "TARGET_SEARCH_WITH_DISTRACTORS; omission preserves the existing report. Invalid origin/mode is 400. "
                     + "Incomplete or unavailable composition returns generic 503, never analytical absence.")
     public Response preview(@PathParam("clinicalPatientId") String patient, @PathParam("therapySessionId") String session,
-            @QueryParam("visualSearchDataOrigin") String visualSearchDataOrigin) {
+            @QueryParam("visualSearchDataOrigin") String visualSearchDataOrigin,
+            @QueryParam("standardScanningDataOrigin") String standardScanningDataOrigin,
+            @QueryParam("sustainedFixationDataOrigin") String sustainedFixationDataOrigin,
+            @QueryParam("compensatorySaccadeDataOrigin") String compensatorySaccadeDataOrigin,
+            @QueryParam("systematicExplorationDataOrigin") String systematicExplorationDataOrigin) {
         try {
             var actor = support.actor(identity);
             if (identity.hasRole("ADMIN")) throw new SecurityException();
-            var result = reports.compose(actor.subject(), actor.token(), uuid(patient), uuid(session), origin(visualSearchDataOrigin));
+            var result = reports.compose(actor.subject(), actor.token(), uuid(patient), uuid(session), origin(visualSearchDataOrigin), scanningOrigin(standardScanningDataOrigin), fixationOrigin(sustainedFixationDataOrigin), saccadeOrigin(compensatorySaccadeDataOrigin), explorationOrigin(systematicExplorationDataOrigin));
             return Response.ok(SessionReportRestAssembler.toResponse(result, mapper))
                     .header("Cache-Control", "no-store").build();
         } catch (PatientReadFailure failure) {
@@ -67,6 +89,59 @@ public class DoctorSessionReportController {
             return null;
         }
         try { return Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin scanningOrigin(String raw) {
+        if (raw == null) {
+            // Quarkus REST can bind an explicitly empty query value to null; only an absent key means omission.
+            if (uriInfo != null && uriInfo.getQueryParameters().containsKey("standardScanningDataOrigin"))
+                throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            return null;
+        }
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin fixationOrigin(String raw) {
+        if (uriInfo != null) {
+            var query = uriInfo.getQueryParameters();
+            if (query.containsKey("sustainedFixationDataOrigin")) {
+                var values = query.get("sustainedFixationDataOrigin");
+                if (raw == null || values == null || values.size() != 1 || !raw.equals(values.getFirst()))
+                    throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            }
+        }
+        if (raw == null) return null;
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin saccadeOrigin(String raw) {
+        if (uriInfo != null) {
+            var query = uriInfo.getQueryParameters();
+            if (query.containsKey("compensatorySaccadeDataOrigin")) {
+                var values = query.get("compensatorySaccadeDataOrigin");
+                if (raw == null || values == null || values.size() != 1 || !raw.equals(values.getFirst()))
+                    throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            }
+        }
+        if (raw == null) return null;
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin explorationOrigin(String raw) {
+        if (uriInfo != null) {
+            var query = uriInfo.getQueryParameters();
+            if (query.containsKey("systematicExplorationDataOrigin")) {
+                var values = query.get("systematicExplorationDataOrigin");
+                if (raw == null || values == null || values.size() != 1 || !raw.equals(values.getFirst()))
+                    throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            }
+        }
+        if (raw == null) return null;
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.valueOf(raw); }
         catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
     }
 

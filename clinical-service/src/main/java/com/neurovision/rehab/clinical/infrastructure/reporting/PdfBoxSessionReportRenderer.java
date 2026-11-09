@@ -36,6 +36,24 @@ public final class PdfBoxSessionReportRenderer implements SessionReportPdfRender
                 JsonNode exact = reader.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(snapshot.reportJson());
                 visualSearch = exact.get("visualSearch");
             }
+            JsonNode standardScanning = null;
+            if (report.has("standardScanning")) {
+                snapshotCodec.standardScanningSelection(snapshot.reportJson(), snapshot.therapySessionId());
+                JsonNode exact = reader.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(snapshot.reportJson());
+                standardScanning = exact.get("standardScanning");
+            }
+            JsonNode sustainedFixation = report.get("sustainedFixation");
+            if (sustainedFixation != null)
+                snapshotCodec.sustainedFixationSelection(snapshot.reportJson(), snapshot.therapySessionId());
+            JsonNode compensatorySaccade = null;
+            if (report.has("compensatorySaccade")) {
+                snapshotCodec.compensatorySaccadeSelection(snapshot.reportJson(), snapshot.therapySessionId());
+                JsonNode exact = reader.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(snapshot.reportJson());
+                compensatorySaccade = exact.get("compensatorySaccade");
+            }
+            JsonNode systematicExploration = report.get("systematicExploration");
+            if (systematicExploration != null)
+                snapshotCodec.systematicExplorationSelection(snapshot.reportJson(), snapshot.therapySessionId());
             try (var document = new PDDocument();
                     var input = Objects.requireNonNull(getClass().getResourceAsStream("/fonts/DejaVuSans.ttf"));
                     var fontBytes = new RandomAccessReadBuffer(input);
@@ -91,7 +109,11 @@ public final class PdfBoxSessionReportRenderer implements SessionReportPdfRender
                             gazePlot(page, stream.path("gazePlot"));
                         }
                     }
-                    visualSearch(page, visualSearch);
+                    trialResults(page, visualSearch, false);
+                    if (standardScanning != null) trialResults(page, standardScanning, true);
+                    if (sustainedFixation != null) sustainedFixationResults(page, sustainedFixation);
+                    if (compensatorySaccade != null) compensatorySaccadeResults(page, compensatorySaccade);
+                    if (systematicExploration != null) systematicExplorationResults(page, systematicExploration);
                     page.section("Interpretation limits");
                     page.row("Important", "This technical report is not a diagnosis, evidence of visual-field recovery or proof of therapeutic efficacy.");
                     page.row("Technical completion", "COMPLETED means the programmed technical objective was met; it does not guarantee complete Telemetry persistence.");
@@ -109,10 +131,10 @@ public final class PdfBoxSessionReportRenderer implements SessionReportPdfRender
         }
     }
 
-    private static void visualSearch(Layout page, JsonNode summary) throws IOException {
+    private static void trialResults(Layout page, JsonNode summary, boolean standardScanning) throws IOException {
         // Fixed labels, closed origins and bounded numeric values fit this existing-layout page block.
         page.space(summary == null ? 64 : 300);
-        page.section("Visual Search - reported final results");
+        page.section(standardScanning ? "Standard Scanning - reported final results" : "Visual Search - reported final results");
         if (summary == null) {
             page.row("Results", "Visual Search results not included");
             return;
@@ -121,16 +143,71 @@ public final class PdfBoxSessionReportRenderer implements SessionReportPdfRender
         page.row("Data origin", origin);
         page.row("Calculation version", summary.path("calculationVersion").textValue());
         page.row("Reported attempts", summary.path("reportedTrialCount").asText());
-        page.row("Hits", summary.path("hitCount").asText());
+        page.row(standardScanning ? "Detected targets" : "Hits", summary.path(standardScanning ? "detectedTargetCount" : "hitCount").asText());
         page.row("Omissions", summary.path("omissionCount").asText());
         page.row("Interruptions", summary.path("interruptedCount").asText());
-        page.row("Eligible searches", summary.path("eligibleSearchCount").asText());
-        var median = summary.path("medianSearchDurationMs");
-        page.row("Median search duration (ms)", median.isNull() ? "Not available" : median.decimalValue().toPlainString());
+        page.row(standardScanning ? "Eligible localizations" : "Eligible searches", summary.path(standardScanning ? "eligibleLocalizationCount" : "eligibleSearchCount").asText());
+        var median = summary.path(standardScanning ? "medianLocalizationDurationMs" : "medianSearchDurationMs");
+        page.row(standardScanning ? "Median localization duration (ms)" : "Median search duration (ms)",
+                median.isNull() ? "Not available" : median.decimalValue().toPlainString());
         page.row("Meaning", "Reported final results only; not total presentations or a completeness guarantee.");
         page.row("Source limitation", origin.equals("SYNTHETIC")
                 ? "SYNTHETIC: test data, not patient evidence."
                 : "PRODUCER_REPORTED: producer-reported outcomes; not algorithmically verified clinical success.");
+    }
+
+    private static void sustainedFixationResults(Layout page, JsonNode summary) throws IOException {
+        page.space(300);
+        page.section("Sustained Fixation - reported final results");
+        String origin = summary.path("dataOrigin").textValue();
+        page.row("Data origin", origin);
+        page.row("Calculation version", summary.path("calculationVersion").textValue());
+        page.row("Reported attempts", summary.path("reportedTrialCount").asText());
+        page.row("Total valid time inside the target (ms)", summary.path("totalInsideTargetMs").asText());
+        page.row("Completed targets", summary.path("completedTargetCount").asText());
+        page.row("Meaning", "Accumulated valid time across reported attempts; not continuous dwell or physiological fixation.");
+        page.row("Source limitation", origin.equals("SYNTHETIC")
+                ? "SYNTHETIC: test data, not patient evidence."
+                : "PRODUCER_REPORTED: producer-reported outcomes; not algorithmically verified clinical success.");
+    }
+
+    private static void compensatorySaccadeResults(Layout page, JsonNode summary) throws IOException {
+        page.space(300);
+        page.section("Compensatory Saccade - reported final results");
+        String origin = summary.path("dataOrigin").textValue();
+        page.row("Data origin", origin);
+        page.row("Calculation version", summary.path("calculationVersion").textValue());
+        page.row("Reported attempts", summary.path("reportedTrialCount").asText());
+        page.row("Reached targets", summary.path("reachedTargetCount").asText());
+        var median = summary.path("medianTimeToTargetMs");
+        page.row("Median time to target (ms)", median.isNull() ? "Not available" : median.decimalValue().toPlainString());
+        page.row("Meaning", "Successful attempts only; includes confirmation dwell. Not physiological saccade duration or evidence of clinical efficacy.");
+        page.row("Source limitation", origin.equals("SYNTHETIC")
+                ? "SYNTHETIC: test data, not patient evidence."
+                : "PRODUCER_REPORTED: producer-reported outcomes; not algorithmically verified clinical success.");
+    }
+
+    private static void systematicExplorationResults(Layout page, JsonNode summary) throws IOException {
+        page.space(240);
+        page.section("Systematic Exploration - reported final results");
+        String origin = summary.path("dataOrigin").textValue();
+        page.row("Data origin", origin);
+        page.row("Calculation version", summary.path("calculationVersion").textValue());
+        page.row("Reported traversals", summary.path("reportedTrialCount").asText());
+        page.row("Meaning", "Saved producer-reported region visits and elapsed durations; not proof of clinical efficacy.");
+        page.row("Source limitation", origin.equals("SYNTHETIC")
+                ? "SYNTHETIC: test data, not patient evidence."
+                : "PRODUCER_REPORTED: producer-reported outcomes; not algorithmically verified clinical success.");
+        if (summary.path("traversals").isEmpty()) page.row("Results", "No reported traversals");
+        for (var traversal : summary.path("traversals")) {
+            // Existing row wrapping and page continuation preserve every saved traversal without truncation.
+            page.space(125);
+            page.row("Traversal reference", traversal.path("trialId").textValue());
+            page.row("Outcome", traversal.path("outcome").textValue());
+            page.row("Visited regions", traversal.path("visitedRegionCount").asText() + " of 4");
+            page.row("Coverage (%)", traversal.path("coveragePercent").asText());
+            page.row("Elapsed duration (ms)", traversal.path("elapsedMs").asText());
+        }
     }
 
     private static void heatmap(Layout page, JsonNode value) throws IOException {

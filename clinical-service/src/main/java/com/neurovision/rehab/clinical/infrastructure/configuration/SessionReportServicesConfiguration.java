@@ -48,10 +48,47 @@ public class SessionReportServicesConfiguration {
     }
 
     @Produces @ApplicationScoped
+    SessionReportStandardScanningPort sessionReportStandardScanning(
+            @ConfigProperty(name = "clinical.analytics.base-url") String base,
+            @ConfigProperty(name = "clinical.analytics.timeout-ms") long timeoutMs, ObjectMapper mapper) {
+        return new AnalyticsStandardScanningReportAdapter(new ReportAnalyticsHttpClient(URI.create(base),timeoutMs,mapper));
+    }
+
+    @Produces @ApplicationScoped
+    SessionReportSustainedFixationPort sessionReportSustainedFixation(
+            @ConfigProperty(name = "clinical.analytics.base-url") String base,
+            @ConfigProperty(name = "clinical.analytics.timeout-ms") long timeoutMs, ObjectMapper mapper) {
+        return new AnalyticsSustainedFixationReportAdapter(new ReportAnalyticsHttpClient(URI.create(base),timeoutMs,mapper));
+    }
+
+    @Produces @ApplicationScoped
+    SessionReportCompensatorySaccadePort sessionReportCompensatorySaccade(
+            @ConfigProperty(name = "clinical.analytics.base-url") String base,
+            @ConfigProperty(name = "clinical.analytics.timeout-ms") long timeoutMs, ObjectMapper mapper) {
+        return new AnalyticsCompensatorySaccadeReportAdapter(new ReportAnalyticsHttpClient(URI.create(base),timeoutMs,mapper));
+    }
+
+    @Produces @ApplicationScoped
+    SessionReportSystematicExplorationPort sessionReportSystematicExploration(
+            @ConfigProperty(name = "clinical.analytics.base-url") String base,
+            @ConfigProperty(name = "clinical.analytics.timeout-ms") long timeoutMs, ObjectMapper mapper) {
+        return new AnalyticsSystematicExplorationReportAdapter(new ReportAnalyticsHttpClient(URI.create(base),timeoutMs,mapper));
+    }
+
+    /** Compatibility composition for existing direct callers; not a second CDI producer. */
     ComposeSessionReportService sessionReports(DoctorTherapySessionQueryService sessions,
             AssignedPatientQueryService patients, AssignedPatientNamesPort names,
             DoctorReportIdentityPort doctors, SessionReportAnalyticsPort analytics, SessionReportVisualSearchPort visualSearch) {
-        return new ComposeSessionReportService(sessions, patients, names, doctors, analytics, visualSearch, Clock.systemUTC());
+        return new ComposeSessionReportService(sessions,patients,names,doctors,analytics,visualSearch,Clock.systemUTC());
+    }
+
+    @Produces @ApplicationScoped
+    ComposeSessionReportService sessionReports(DoctorTherapySessionQueryService sessions,
+            AssignedPatientQueryService patients, AssignedPatientNamesPort names,
+            DoctorReportIdentityPort doctors, SessionReportAnalyticsPort analytics, SessionReportVisualSearchPort visualSearch, SessionReportStandardScanningPort standardScanning,
+            SessionReportSustainedFixationPort sustainedFixation, SessionReportCompensatorySaccadePort compensatorySaccade,
+            SessionReportSystematicExplorationPort systematicExploration) {
+        return new ComposeSessionReportService(sessions, patients, names, doctors, analytics, visualSearch, standardScanning, sustainedFixation, compensatorySaccade, systematicExploration, Clock.systemUTC());
     }
 
     @Produces @ApplicationScoped

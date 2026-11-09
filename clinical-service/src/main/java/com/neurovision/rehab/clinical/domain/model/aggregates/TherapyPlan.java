@@ -8,6 +8,7 @@ import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapyPlanStatu
 import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalInt;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.Collections;
 
@@ -81,27 +82,39 @@ public final class TherapyPlan {
                 dailyExercisePrescriptions);
     }
 
-    public void validateAdmission(
-            ExerciseCode exerciseCode,
-            long consumedSessionSlots,
-            long consumedExerciseSlots,
-            long exposureSeconds) {
-        if (status != TherapyPlanStatus.ACTIVE) throw new IllegalStateException("Therapy plan is not active");
-        if (consumedSessionSlots >= dailySessionLimit) throw new IllegalStateException("Daily session quota is exhausted");
+    public enum AdmissionBlocker {
+        PLAN_NOT_ACTIVE("Therapy plan is not active"),
+        PLAN_QUOTA_EXHAUSTED("Daily session quota is exhausted"),
+        EXERCISE_QUOTA_EXHAUSTED("Daily prescribed quota for exercise is exhausted"),
+        DAILY_TARGET_TIME_INSUFFICIENT("Remaining daily target cannot accommodate a valid session"),
+        DAILY_SAFETY_TIME_INSUFFICIENT("Remaining hard safety allowance cannot accommodate the session");
+
+        private final String message;
+        AdmissionBlocker(String message) { this.message = message; }
+    }
+
+    /** Pure shared decision: reading availability never reserves or releases quota. */
+    public Optional<AdmissionBlocker> admissionBlocker(
+            ExerciseCode exerciseCode, long consumedSessionSlots, long consumedExerciseSlots, long exposureSeconds) {
+        if (status != TherapyPlanStatus.ACTIVE) return Optional.of(AdmissionBlocker.PLAN_NOT_ACTIVE);
+        if (consumedSessionSlots >= dailySessionLimit) return Optional.of(AdmissionBlocker.PLAN_QUOTA_EXHAUSTED);
         int prescribedQuantity = dailyExercisePrescriptions.getOrDefault(exerciseCode, 0);
-        if (consumedExerciseSlots >= prescribedQuantity) {
-            throw new IllegalStateException("Daily prescribed quota for exercise is exhausted");
-        }
+        if (consumedExerciseSlots >= prescribedQuantity) return Optional.of(AdmissionBlocker.EXERCISE_QUOTA_EXHAUSTED);
         long remainingTargetSeconds = dailyTargetDurationMinutes * 60L - exposureSeconds;
-        if (remainingTargetSeconds < minimumValidDurationMinutes * 60L) {
-            throw new IllegalStateException("Remaining daily target cannot accommodate a valid session");
-        }
+        if (remainingTargetSeconds < minimumValidDurationMinutes * 60L)
+            return Optional.of(AdmissionBlocker.DAILY_TARGET_TIME_INSUFFICIENT);
         if (dailyHardSafetyLimitMinutes != null) {
             long remainingSafetySeconds = dailyHardSafetyLimitMinutes * 60L - exposureSeconds;
-            if (remainingSafetySeconds < maximumSessionDurationMinutes * 60L) {
-                throw new IllegalStateException("Remaining hard safety allowance cannot accommodate the session");
-            }
+            if (remainingSafetySeconds < maximumSessionDurationMinutes * 60L)
+                return Optional.of(AdmissionBlocker.DAILY_SAFETY_TIME_INSUFFICIENT);
         }
+        return Optional.empty();
+    }
+
+    public void validateAdmission(ExerciseCode exerciseCode, long consumedSessionSlots,
+            long consumedExerciseSlots, long exposureSeconds) {
+        admissionBlocker(exerciseCode, consumedSessionSlots, consumedExerciseSlots, exposureSeconds)
+                .ifPresent(blocker -> { throw new IllegalStateException(blocker.message); });
     }
 
     public TherapyPlanId id() { return id; }

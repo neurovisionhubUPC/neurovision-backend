@@ -56,4 +56,39 @@ class JsonSessionReportSnapshotEncoderTest {
         var root=selected(); String duplicate=root.toString().replace("\"dataOrigin\":\"SYNTHETIC\"","\"dataOrigin\":\"SYNTHETIC\",\"dataOrigin\":\"PRODUCER_REPORTED\"");
         assertThrows(IllegalStateException.class,()->codec.visualSearchSelection(duplicate,SESSION));
     }
+
+    ObjectNode exploration() throws Exception {
+        var f=new Fixture(); f.exploration=true; f.echoExplorationOrigin=true;
+        return (ObjectNode)mapper.readTree(codec.encode(f.composer().compose(DOCTOR,TOKEN,PATIENT,SESSION,
+                null,null,null,null,com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.SYNTHETIC)));
+    }
+    @Test void explorationWhitelistAndHistoricalOmissionRemainStable() throws Exception {
+        var root=exploration(); var section=root.path("systematicExploration");
+        var fields=new HashSet<String>(); section.fieldNames().forEachRemaining(fields::add);
+        assertEquals(Set.of("calculationVersion","therapySessionId","configurationId","configurationVersion","dataOrigin","reportedTrialCount","traversals"),fields);
+        fields.clear(); section.path("traversals").get(0).fieldNames().forEachRemaining(fields::add);
+        assertEquals(Set.of("trialId","outcome","visitedRegionCount","coveragePercent","elapsedMs"),fields);
+        assertEquals("SYNTHETIC",codec.systematicExplorationSelection(root.toString(),SESSION).name());
+        assertNull(codec.systematicExplorationSelection("{}",SESSION));
+        assertNull(codec.systematicExplorationSelection(selected().toString(),SESSION));
+        assertFalse(root.toString().contains(TOKEN)); assertFalse(root.toString().contains(DOCTOR));
+    }
+    @Test void malformedExplorationCannotMasqueradeAsHistoricalOmissionOrCoexistWithOtherSections() throws Exception {
+        for (String invalid:List.of("{\"systematicExploration\":null}","{\"systematicExploration\":{}}"))
+            assertThrows(IllegalStateException.class,()->codec.systematicExplorationSelection(invalid,SESSION));
+        for(String field:List.of("dataOrigin","calculationVersion","configurationId","therapySessionId","configurationVersion")) {
+            var root=exploration(); ((ObjectNode)root.path("systematicExploration")).put(field,"invalid");
+            assertThrows(IllegalStateException.class,()->codec.systematicExplorationSelection(root.toString(),SESSION));
+        }
+        for(String section:List.of("visualSearch","standardScanning","sustainedFixation","compensatorySaccade")) {
+            var root=exploration(); root.putNull(section);
+            assertThrows(IllegalStateException.class,()->codec.systematicExplorationSelection(root.toString(),SESSION));
+            assertThrows(IllegalStateException.class,()->codec.visualSearchSelection(root.toString(),SESSION));
+        }
+        var wrongMode=exploration(); wrongMode.put("mode","STANDARD_SCANNING");
+        assertThrows(IllegalStateException.class,()->codec.systematicExplorationSelection(wrongMode.toString(),SESSION));
+        var root=exploration(); ((ObjectNode)root.path("configuration")).put("configurationVersion",2);
+        final var wrong=root;
+        assertThrows(IllegalStateException.class,()->codec.systematicExplorationSelection(wrong.toString(),SESSION));
+    }
 }

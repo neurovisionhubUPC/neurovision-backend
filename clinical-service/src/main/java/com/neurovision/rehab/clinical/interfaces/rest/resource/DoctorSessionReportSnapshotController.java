@@ -70,20 +70,46 @@ public class DoctorSessionReportSnapshotController {
     /** Source-compatible omitted-selection invocation; only the overload below is a REST route. */
     public Response create(String patient, String session, String key, String body) { return create(patient,session,key,null,body); }
 
+    public Response create(String patient, String session, String key, String origin, String body) {
+        return create(patient,session,key,origin,null,body);
+    }
+
+    public Response create(String patient, String session, String key, String visualOrigin, String scanningOrigin, String body) {
+        return create(patient,session,key,visualOrigin,scanningOrigin,null,body);
+    }
+
+    public Response create(String patient, String session, String key, String visualOrigin, String scanningOrigin,
+            String fixationOrigin, String body) {
+        return create(patient,session,key,visualOrigin,scanningOrigin,fixationOrigin,null,body);
+    }
+
+    public Response create(String patient, String session, String key, String visualOrigin, String scanningOrigin,
+            String fixationOrigin, String saccadeOrigin, String body) {
+        return create(patient,session,key,visualOrigin,scanningOrigin,fixationOrigin,saccadeOrigin,null,body);
+    }
+
     @POST @RolesAllowed("DOCTOR")
     @Operation(summary = "Create a manual immutable session report copy",
             description = "Pure DOCTOR, current authorship and ACTIVE assignment required. No request body. "
+                    + "Optional sustainedFixationDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen SUSTAINED_TARGET_FIXATION. "
+                    + "Optional systematicExplorationDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen SYSTEMATIC_EXPLORATION. "
+                    + "Optional compensatorySaccadeDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen COMPENSATORY_SACCADE. "
+                    + "Optional standardScanningDataOrigin=SYNTHETIC|PRODUCER_REPORTED selects only frozen STANDARD_SCANNING; selections are mutually exclusive. "
                     + "Optional visualSearchDataOrigin=SYNTHETIC|PRODUCER_REPORTED freezes observed Visual Search metrics. "
                     + "Idempotency-Key plus the same selected/omitted origin replays without enrichment; another origin is 409. "
                     + "A new key makes a new manual copy. Invalid origin/unsupported mode is 400. "
                     + "201 with Location for new copies, 200 for replay. Uncertain writes return generic 503 without automatic retry.")
     public Response create(@PathParam("clinicalPatientId") String patient, @PathParam("therapySessionId") String session,
-            @HeaderParam("Idempotency-Key") String key, @QueryParam("visualSearchDataOrigin") String visualSearchDataOrigin, String body) {
+            @HeaderParam("Idempotency-Key") String key, @QueryParam("visualSearchDataOrigin") String visualSearchDataOrigin,
+            @QueryParam("standardScanningDataOrigin") String standardScanningDataOrigin,
+            @QueryParam("sustainedFixationDataOrigin") String sustainedFixationDataOrigin,
+            @QueryParam("compensatorySaccadeDataOrigin") String compensatorySaccadeDataOrigin,
+            @QueryParam("systematicExplorationDataOrigin") String systematicExplorationDataOrigin, String body) {
         try {
             var actor = actor();
             var patientId = uuid(patient); var sessionId = uuid(session);
             if (body != null && !body.isBlank()) throw new IllegalArgumentException();
-            var result = creates.create(actor.subject(), actor.token(), patientId, sessionId, key, origin(visualSearchDataOrigin));
+            var result = creates.create(actor.subject(), actor.token(), patientId, sessionId, key, origin(visualSearchDataOrigin), scanningOrigin(standardScanningDataOrigin), fixationOrigin(sustainedFixationDataOrigin), saccadeOrigin(compensatorySaccadeDataOrigin), explorationOrigin(systematicExplorationDataOrigin));
             var response = Response.status(result.created() ? 201 : 200).entity(response(result.snapshot()));
             if (result.created()) response.location(URI.create("/api/v1/clinical-patients/" + patientId
                     + "/therapy-sessions/" + sessionId + "/report-snapshots/" + result.snapshot().id()));
@@ -154,10 +180,11 @@ public class DoctorSessionReportSnapshotController {
                     .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
             JsonNode report = reader.readTree(copy.reportJson());
             if (report == null || !report.isObject()) throw new IllegalStateException();
-            if (report.has("visualSearch")) {
+            if (report.has("visualSearch") || report.has("standardScanning")) {
                 // Preserve the new decimal median without changing legacy baseline number decoding.
                 JsonNode exact = reader.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(copy.reportJson());
-                ((com.fasterxml.jackson.databind.node.ObjectNode)report).set("visualSearch",exact.get("visualSearch"));
+                if (report.has("visualSearch")) ((com.fasterxml.jackson.databind.node.ObjectNode)report).set("visualSearch",exact.get("visualSearch"));
+                if (report.has("standardScanning")) ((com.fasterxml.jackson.databind.node.ObjectNode)report).set("standardScanning",exact.get("standardScanning"));
             }
             var root = JsonNodeFactory.instance.objectNode().put("reportSnapshotId", copy.id().toString()).put("createdAt", copy.createdAt().toString());
             root.set("report", report);
@@ -172,6 +199,56 @@ public class DoctorSessionReportSnapshotController {
             return null;
         }
         try { return Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin scanningOrigin(String raw) {
+        if (raw == null) {
+            // Quarkus REST can bind an explicitly empty query value to null; only an absent key means omission.
+            if (uriInfo != null && uriInfo.getQueryParameters().containsKey("standardScanningDataOrigin"))
+                throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            return null;
+        }
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin fixationOrigin(String raw) {
+        if (uriInfo != null) {
+            var query = uriInfo.getQueryParameters();
+            if (query.containsKey("sustainedFixationDataOrigin")) {
+                var values = query.get("sustainedFixationDataOrigin");
+                if (raw == null || values == null || values.size() != 1 || !raw.equals(values.getFirst()))
+                    throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            }
+        }
+        if (raw == null) return null;
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin saccadeOrigin(String raw) {
+        if (uriInfo != null) {
+            var query = uriInfo.getQueryParameters();
+            if (query.containsKey("compensatorySaccadeDataOrigin")) {
+                var values = query.get("compensatorySaccadeDataOrigin");
+                if (raw == null || values == null || values.size() != 1 || !raw.equals(values.getFirst()))
+                    throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            }
+        }
+        if (raw == null) return null;
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin.valueOf(raw); }
+        catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
+    }
+    private com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin explorationOrigin(String raw) {
+        if (uriInfo != null) {
+            var query = uriInfo.getQueryParameters();
+            if (query.containsKey("systematicExplorationDataOrigin")) {
+                var values = query.get("systematicExplorationDataOrigin");
+                if (raw == null || values == null || values.size() != 1 || !raw.equals(values.getFirst()))
+                    throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST);
+            }
+        }
+        if (raw == null) return null;
+        try { return com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.valueOf(raw); }
         catch (IllegalArgumentException invalid) { throw new PatientReadFailure(PatientReadFailure.Kind.INVALID_REQUEST); }
     }
     private static UUID uuid(String raw) {

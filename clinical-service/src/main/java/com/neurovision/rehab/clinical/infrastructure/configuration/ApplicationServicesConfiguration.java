@@ -67,9 +67,9 @@ public class ApplicationServicesConfiguration {
     ListPatientTherapyPlansQueryService listPatientTherapyPlansQueryService(
             ClinicalPatientRepository patients, TherapyPlanRepository plans,
             TherapyPlanRevisionRepository revisions, DoctorPatientAssignmentRepository assignments,
-            TherapeuticExerciseConfigurationRepository configurations) {
+            TherapeuticExerciseConfigurationRepository configurations, TherapySessionRepository sessions) {
         return new ListPatientTherapyPlansQueryService(patients, plans, revisions, assignments,
-                configurations, Clock.systemUTC());
+                configurations, sessions, Clock.systemUTC());
     }
 
     @Produces

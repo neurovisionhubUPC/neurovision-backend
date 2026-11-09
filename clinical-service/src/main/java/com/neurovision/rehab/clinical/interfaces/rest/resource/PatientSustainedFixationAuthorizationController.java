@@ -1,0 +1,59 @@
+package com.neurovision.rehab.clinical.interfaces.rest.resource;
+
+import com.neurovision.rehab.clinical.application.internal.queryservices.AuthorizeSustainedFixationSessionQueryService;
+import com.neurovision.rehab.clinical.domain.model.valueobjects.TherapySessionId;
+import io.quarkus.oidc.AccessTokenCredential;
+import io.quarkus.security.identity.SecurityIdentity;
+import jakarta.annotation.security.RolesAllowed;
+import jakarta.enterprise.context.RequestScoped;
+import jakarta.ws.rs.*;
+import jakarta.ws.rs.core.*;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.eclipse.microprofile.openapi.annotations.Operation;
+
+@Path("/api/internal/v1/therapy-sessions/{therapySessionId}/sustained-fixation-result-authorization")
+@Produces(MediaType.APPLICATION_JSON)
+@RolesAllowed("PATIENT")
+@RequestScoped
+public class PatientSustainedFixationAuthorizationController {
+    private final AuthorizeSustainedFixationSessionQueryService service;
+    private final SecurityIdentity identity;
+    public PatientSustainedFixationAuthorizationController(AuthorizeSustainedFixationSessionQueryService service, SecurityIdentity identity) {
+        this.service = service;
+        this.identity = identity;
+    }
+
+    @GET
+    @Operation(summary = "Authorize own Sustained Fixation result reception", description = "Read-only current permission and frozen session policy. Original PATIENT access token, no token minting, state transition or lease renewal.")
+    public Response authorize(@PathParam("therapySessionId") String rawSessionId) {
+        try {
+            if (identity == null || identity.isAnonymous()) return error(401, "UNAUTHENTICATED");
+            if (!Set.of("PATIENT").equals(identity.getRoles())
+                    || !(identity.getPrincipal() instanceof JsonWebToken jwt)) return error(403, "FORBIDDEN");
+            var credential = identity.getCredential(AccessTokenCredential.class);
+            if (credential == null || credential.getToken() == null || credential.getToken().isBlank()) return error(401, "UNAUTHENTICATED");
+            final UUID id;
+            try { id = UUID.fromString(rawSessionId); if (!id.toString().equals(rawSessionId)) throw new IllegalArgumentException(); }
+            catch (RuntimeException invalid) { return error(400, "INVALID_REQUEST"); }
+            var permit = service.authorize(jwt.getSubject(), new TherapySessionId(id));
+            return Response.ok(new Payload(1, true, permit.therapySessionId(), permit.mayInsert(), permit.configurationId(),
+                    permit.configurationVersion(), permit.minimumFixationMs(), permit.maximumFixationMs()))
+                    .header("Cache-Control", "no-store").build();
+        } catch (SecurityException forbidden) { return error(403, "FORBIDDEN"); }
+        catch (RuntimeException unavailable) { return error(503, "UNAVAILABLE"); }
+    }
+
+    private static Response error(int status, String code) {
+        var response = Response.status(status).entity(Map.of("code", "SUSTAINED_FIXATION_AUTHORIZATION_" + code)).header("Cache-Control", "no-store");
+        if (status == 401) response.header("WWW-Authenticate", "Bearer");
+        return response.build();
+    }
+    @io.quarkus.runtime.annotations.RegisterForReflection
+    public record Payload(int contractVersion, boolean permitted, UUID therapySessionId, boolean mayInsert,
+            UUID configurationId, long configurationVersion, int minimumFixationMs, int maximumFixationMs) {
+        @Override public String toString() { return "SustainedFixationAuthorizationResponse[redacted]"; }
+    }
+}

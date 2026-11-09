@@ -38,6 +38,372 @@ class PdfBoxSessionReportRendererTest {
         return f.service().create("synthetic-doctor", "synthetic-token", new UUID(0, 1), new UUID(0, 2),
                 "visual-pdf-" + ++visualCopyNumber, selected).snapshot();
     }
+    private static final String EXPLORATION_TABLE = "Systematic Exploration - reported final results";
+    private Snapshot explorationCopy(String origin, int count) {
+        f.exploration = true;
+        var selected = com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin.valueOf(origin);
+        var rows = new ArrayList<com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Traversal>();
+        for (int i = 0; i < count; i++) {
+            int regions = i % 3 == 0 ? 4 : i % 3 == 1 ? 2 : 1;
+            var outcome = com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Outcome.valueOf(
+                    regions == 4 ? "COMPLETED" : regions == 2 ? "TIMED_OUT" : "INTERRUPTED");
+            rows.add(new com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Traversal(
+                    String.format(Locale.ROOT, "traversal-%04d", i), outcome, regions, regions * 25, regions == 4 ? 4000 : regions == 2 ? 5000 : 1500));
+        }
+        f.explorationSummary = new com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Summary(
+                "systematic-exploration-trial-v1", new UUID(0, 2), new UUID(0, 4), 1, selected, count, rows);
+        return f.service().create("synthetic-doctor", "synthetic-token", new UUID(0, 1), new UUID(0, 2),
+                "exploration-pdf-" + origin + "-" + count, null, null, null, null, selected).snapshot();
+    }
+
+    @Test void rendersOnlyFrozenExplorationRowsAndProvenance() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            var saved = explorationCopy(origin, 3); String frozen = saved.reportJson();
+            int peers = f.peers, writes = f.writes, observed = f.explorationCalls;
+            f.failPeer = "names";
+            byte[] bytes = renderer.render(saved); String flat = compact(text(bytes));
+            for (String value : List.of(EXPLORATION_TABLE, "Data origin" + origin,
+                    "Calculation version systematic-exploration-trial-v1", "Reported traversals3",
+                    "Traversal reference traversal-0000", "Outcome COMPLETED", "Visited regions4 of 4", "Coverage (%)100", "Elapsed duration (ms)4000",
+                    "Traversal reference traversal-0001", "Outcome TIMED_OUT", "Visited regions2 of 4", "Coverage (%)50", "Elapsed duration (ms)5000",
+                    "Traversal reference traversal-0002", "Outcome INTERRUPTED", "Visited regions1 of 4", "Coverage (%)25", "Elapsed duration (ms)1500"))
+                assertTrue(flat.contains(compact(value)), "Frozen exploration value missing");
+            assertTrue(flat.indexOf("traversal-0000") < flat.indexOf("traversal-0001"));
+            assertTrue(flat.indexOf("traversal-0001") < flat.indexOf("traversal-0002"));
+            assertTrue(flat.contains(origin.equals("SYNTHETIC") ? "testdata,notpatientevidence" : "notalgorithmicallyverifiedclinicalsuccess"));
+            assertTrue(flat.contains("notproofofclinicalefficacy"));
+            assertEquals(frozen, saved.reportJson()); assertEquals(peers, f.peers);
+            assertEquals(writes, f.writes); assertEquals(observed, f.explorationCalls);
+            exportVisual(".systematic-exploration-" + origin.toLowerCase(Locale.ROOT), bytes); f.failPeer = null;
+        }
+    }
+
+    @Test void explorationEmptyAndAbsentRemainDifferent() throws Exception {
+        byte[] bytes = renderer.render(explorationCopy("SYNTHETIC", 0)); String flat = compact(text(bytes));
+        assertTrue(flat.contains(compact(EXPLORATION_TABLE))); assertTrue(flat.contains("Reportedtraversals0"));
+        assertTrue(flat.contains("Noreportedtraversals")); assertFalse(flat.contains("Elapsedduration"));
+        f.exploration = false; assertFalse(text(renderer.render(original())).contains(EXPLORATION_TABLE));
+        exportVisual(".systematic-exploration-empty", bytes);
+    }
+
+    @Test void explorationMalformedPresentSectionFailsWithoutChangingCopy() throws Exception {
+        var saved = explorationCopy("SYNTHETIC", 3); var baseline = (ObjectNode) f.mapper.readTree(saved.reportJson());
+        for (String fault : List.of("null", "count", "coverage", "origin", "binding", "overflow")) {
+            var changed = baseline.deepCopy(); var section = (ObjectNode) changed.get("systematicExploration");
+            switch (fault) {
+                case "null" -> changed.putNull("systematicExploration");
+                case "count" -> section.put("reportedTrialCount", 0);
+                case "coverage" -> ((ObjectNode) section.withArray("traversals").get(0)).put("coveragePercent", 99);
+                case "origin" -> section.put("dataOrigin", "UNKNOWN");
+                case "binding" -> section.put("therapySessionId", new UUID(0, 99).toString());
+                case "overflow" -> section.put("reportedTrialCount", 1001);
+            }
+            var invalid = copy(saved, changed); String frozen = invalid.reportJson();
+            var error = assertThrows(IllegalStateException.class, () -> renderer.render(invalid));
+            assertEquals("Session report PDF unavailable", error.getMessage()); assertNull(error.getCause());
+            assertEquals(frozen, invalid.reportJson());
+        }
+    }
+
+    @Test void explorationMaximumTraversalsContinueAcrossPagesWithoutTruncation() throws Exception {
+        var saved = explorationCopy("SYNTHETIC", 1000); String frozen = saved.reportJson();
+        byte[] bytes = renderer.render(saved); String extracted = text(bytes);
+        assertEquals(1000, extracted.split("Traversal reference", -1).length - 1);
+        assertTrue(extracted.contains("traversal-0999"));
+        try (var doc = Loader.loadPDF(bytes)) { assertTrue(doc.getNumberOfPages() > 1); }
+        assertEquals(frozen, saved.reportJson());
+    }
+
+    private static final String FIXATION_TABLE = "Sustained Fixation - reported final results";
+
+    private Snapshot fixationCopy(String origin, long attempts, long insideTargetMs, long completed) {
+        var selected = com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin.valueOf(origin);
+        f.fixationSummary = new com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Summary(
+                "sustained-fixation-trial-v1", new UUID(0, 2), new UUID(0, 4), 1, selected,
+                attempts, insideTargetMs, completed);
+        return f.service().create("synthetic-doctor", "synthetic-token", new UUID(0, 1), new UUID(0, 2),
+                "fixation-pdf-" + origin + "-" + attempts, null, null, selected).snapshot();
+    }
+
+    @Test void rendersFrozenSustainedFixationRowsAndSourceLimitsTogether() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            var saved = fixationCopy(origin, 3, 4201, 2);
+            String frozen = saved.reportJson();
+            int peers = f.peers, writes = f.writes;
+            f.failPeer = "names";
+            byte[] bytes = renderer.render(saved);
+            assertTrue(text(bytes).contains("Sin evidencia analítica disponible"));
+            try (var doc = Loader.loadPDF(bytes)) {
+                int tables = 0;
+                for (int i = 1; i <= doc.getNumberOfPages(); i++) {
+                    var stripper = new PDFTextStripper();
+                    stripper.setStartPage(i);
+                    stripper.setEndPage(i);
+                    String page = stripper.getText(doc);
+                    if (!page.contains(FIXATION_TABLE)) continue;
+                    tables++;
+                    String flat = compact(page);
+                    for (String row : List.of("Dataorigin" + origin, "Calculationversionsustained-fixation-trial-v1",
+                            "Reportedattempts3", "Totalvalidtimeinsidethetarget(ms)4201", "Completedtargets2"))
+                        assertTrue(flat.contains(row), "Saved Sustained Fixation row missing from its table page");
+                    assertTrue(flat.contains("notcontinuousdwellorphysiologicalfixation"));
+                    assertTrue(flat.contains(origin.equals("SYNTHETIC") ? "testdata,notpatientevidence"
+                            : "notalgorithmicallyverifiedclinicalsuccess"));
+                }
+                assertEquals(1, tables);
+            }
+            assertEquals(frozen, saved.reportJson());
+            assertEquals(peers, f.peers);
+            assertEquals(writes, f.writes);
+            exportVisual(".sustained-fixation-" + origin.toLowerCase(Locale.ROOT), bytes);
+            f.failPeer = null;
+        }
+    }
+
+    @Test void sustainedFixationConfirmedZeroIsNotAnOmittedSection() throws Exception {
+        String zero = compact(text(renderer.render(fixationCopy("SYNTHETIC", 0, 0, 0))));
+        assertTrue(zero.contains(compact(FIXATION_TABLE)));
+        assertTrue(zero.contains("Reportedattempts0"));
+        assertTrue(zero.contains("Totalvalidtimeinsidethetarget(ms)0"));
+        assertTrue(zero.contains("Completedtargets0"));
+        assertFalse(text(renderer.render(original())).contains(FIXATION_TABLE));
+    }
+
+    @Test void malformedOrMismatchedSustainedFixationFailsWithoutAPartialPdf() throws Exception {
+        var saved = fixationCopy("SYNTHETIC", 3, 4201, 2);
+        int peers = f.peers, writes = f.writes;
+        for (int kind = 0; kind < 11; kind++) {
+            var report = (ObjectNode) f.mapper.readTree(saved.reportJson());
+            var summary = (ObjectNode) report.path("sustainedFixation");
+            switch (kind) {
+                case 0 -> report.putNull("sustainedFixation");
+                case 1 -> summary.remove("totalInsideTargetMs");
+                case 2 -> summary.put("totalInsideTargetMs", 4201.5);
+                case 3 -> summary.put("completedTargetCount", 4);
+                case 4 -> summary.put("dataOrigin", "UNKNOWN");
+                case 5 -> summary.put("calculationVersion", "unknown");
+                case 6 -> summary.put("therapySessionId", new UUID(0, 99).toString());
+                case 7 -> summary.put("configurationId", new UUID(0, 99).toString());
+                case 8 -> summary.put("configurationVersion", 2);
+                case 9 -> report.put("mode", "STANDARD_SCANNING");
+                case 10 -> report.set("standardScanning", summary.deepCopy());
+            }
+            var invalid = copy(saved, report);
+            String frozen = invalid.reportJson();
+            var error = assertThrows(IllegalStateException.class, () -> renderer.render(invalid));
+            assertEquals("Session report PDF unavailable", error.getMessage());
+            assertNull(error.getCause());
+            assertEquals(frozen, invalid.reportJson());
+        }
+        assertEquals(peers, f.peers);
+        assertEquals(writes, f.writes);
+    }
+
+
+    private static final String SACCADE_TABLE = "Compensatory Saccade - reported final results";
+
+    private Snapshot saccadeCopy(String origin, long reported, long reached, String median) {
+        var selected = com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin.valueOf(origin);
+        f.saccade = true;
+        f.saccadeSummary = new com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Summary(
+                "compensatory-saccade-trial-v1", new UUID(0, 2), new UUID(0, 4), 1, selected,
+                reported, reached, median == null ? null : new java.math.BigDecimal(median));
+        return f.service().create("synthetic-doctor", "synthetic-token", new UUID(0, 1), new UUID(0, 2),
+                "saccade-pdf-" + origin + "-" + reported + "-" + reached, null, null, null, selected).snapshot();
+    }
+
+    @Test void rendersFrozenCompensatorySaccadeRowsAndSourceLimitsTogether() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            var saved = saccadeCopy(origin, 3, 2, "1250.5");
+            String frozen = saved.reportJson();
+            int peers = f.peers, writes = f.writes;
+            f.failPeer = "saccade";
+            try {
+                byte[] bytes = renderer.render(saved);
+                assertTrue(text(bytes).contains("Sin evidencia anal\u00edtica disponible"));
+                try (var doc = Loader.loadPDF(bytes)) {
+                    int tables = 0;
+                    for (int i = 1; i <= doc.getNumberOfPages(); i++) {
+                        var stripper = new PDFTextStripper();
+                        stripper.setStartPage(i);
+                        stripper.setEndPage(i);
+                        String page = stripper.getText(doc);
+                        if (!page.contains(SACCADE_TABLE)) continue;
+                        tables++;
+                        String flat = compact(page);
+                        for (String row : List.of("Dataorigin" + origin, "Calculationversioncompensatory-saccade-trial-v1",
+                                "Reportedattempts3", "Reachedtargets2", "Mediantimetotarget(ms)1250.5",
+                                "Successfulattemptsonly;includesconfirmationdwell"))
+                            assertTrue(flat.contains(row), "Saved Compensatory Saccade value missing from its table page");
+                        assertTrue(flat.contains(origin.equals("SYNTHETIC") ? "testdata,notpatientevidence"
+                                : "notalgorithmicallyverifiedclinicalsuccess"));
+                    }
+                    assertEquals(1, tables);
+                }
+                assertEquals(frozen, saved.reportJson());
+                assertEquals(peers, f.peers);
+                assertEquals(writes, f.writes);
+            } finally {
+                f.failPeer = null;
+            }
+        }
+    }
+
+    @Test void compensatorySaccadeZeroAndNullRemainDistinctFromOmission() throws Exception {
+        for (long reported : List.of(0L, 3L)) {
+            String shown = compact(text(renderer.render(saccadeCopy("SYNTHETIC", reported, 0, null))));
+            assertTrue(shown.contains(compact(SACCADE_TABLE)));
+            assertTrue(shown.contains("Reportedattempts" + reported));
+            assertTrue(shown.contains("Reachedtargets0"));
+            assertTrue(shown.contains("Mediantimetotarget(ms)Notavailable"));
+        }
+        String omitted = compact(text(renderer.render(original())));
+        assertFalse(omitted.contains(compact(SACCADE_TABLE)));
+        assertFalse(omitted.contains("Mediantimetotarget(ms)"));
+    }
+
+    @Test void invalidCompensatorySaccadeFailsWithoutAPartialPdf() throws Exception {
+        var saved = saccadeCopy("SYNTHETIC", 3, 2, "1250.5");
+        int peers = f.peers, writes = f.writes;
+        for (int kind = 0; kind < 4; kind++) {
+            var report = (ObjectNode) f.mapper.readTree(saved.reportJson());
+            var summary = (ObjectNode) report.path("compensatorySaccade");
+            switch (kind) {
+                case 0 -> report.putNull("compensatorySaccade");
+                case 1 -> summary.putNull("medianTimeToTargetMs");
+                case 2 -> summary.put("configurationVersion", 2);
+                case 3 -> report.put("mode", "STANDARD_SCANNING");
+            }
+            var invalid = copy(saved, report);
+            String frozen = invalid.reportJson();
+            var error = assertThrows(IllegalStateException.class, () -> renderer.render(invalid));
+            assertEquals("Session report PDF unavailable", error.getMessage());
+            assertNull(error.getCause());
+            assertEquals(frozen, invalid.reportJson());
+        }
+        assertEquals(peers, f.peers);
+        assertEquals(writes, f.writes);
+    }
+
+    private int standardCopyNumber;
+    private Snapshot standardCopy(String origin, String median, long reported, long detected, long omissions, long interrupted) {
+        f.standardScanning = true;
+        f.visualSearch = false;
+        var selected = com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.valueOf(origin);
+        f.scanningSummary = new com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Summary(
+                "standard-scanning-trial-v1", new UUID(0, 2), new UUID(0, 4), 1, selected,
+                reported, detected, omissions, interrupted, detected, median == null ? null : new java.math.BigDecimal(median));
+        return f.service().create("synthetic-doctor", "synthetic-token", new UUID(0, 1), new UUID(0, 2),
+                "standard-pdf-" + ++standardCopyNumber, null, selected).snapshot();
+    }
+
+    @Test void rendersBothFrozenStandardScanningOriginsMetricsAndSourceLimitationsTogether() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            var saved = standardCopy(origin, "1250.5", 6, 3, 2, 1); String frozen = saved.reportJson();
+            int peers = f.peers, writes = f.writes; f.failPeer = "names";
+            byte[] bytes = renderer.render(saved); String all = text(bytes);
+            assertTrue(all.contains("Standard Scanning - reported final results"));
+            assertTrue(all.contains("Sin evidencia analítica disponible"), "Baseline absence remains independent of trial results");
+            try (var doc = Loader.loadPDF(bytes)) {
+                boolean found = false;
+                for (int i = 1; i <= doc.getNumberOfPages(); i++) {
+                    var stripper = new PDFTextStripper(); stripper.setStartPage(i); stripper.setEndPage(i);
+                    String page = stripper.getText(doc);
+                    if (!page.contains("Standard Scanning - reported final results")) continue;
+                    String flat = compact(page); found = true;
+                    for (String value : List.of("Dataorigin" + origin, "Calculationversionstandard-scanning-trial-v1", "Reportedattempts6",
+                            "Detectedtargets3", "Omissions2", "Interruptions1", "Eligiblelocalizations3", "Medianlocalizationduration(ms)1250.5"))
+                        assertTrue(flat.contains(value), "Saved Standard Scanning table value missing from its section page");
+                    assertTrue(flat.contains(origin.equals("SYNTHETIC") ? "testdata,notpatientevidence" : "notalgorithmicallyverifiedclinicalsuccess"));
+                    assertTrue(flat.contains("nottotalpresentationsoracompletenessguarantee"));
+                }
+                assertTrue(found, "Standard Scanning table and limitations must remain on one page");
+            }
+            assertEquals(frozen, saved.reportJson()); assertEquals(peers, f.peers); assertEquals(writes, f.writes);
+            exportVisual(origin.equals("SYNTHETIC") ? ".standard-scanning-synthetic" : ".standard-scanning-producer", bytes);
+            f.failPeer = null;
+        }
+    }
+
+    @Test void standardScanningConfirmedZeroNoDetectionsAndLegacyOmissionStayDistinct() throws Exception {
+        var zero = standardCopy("SYNTHETIC", null, 0, 0, 0, 0); byte[] zeroBytes = renderer.render(zero);
+        String zeroText = compact(text(zeroBytes));
+        assertTrue(zeroText.contains("Reportedattempts0")); assertTrue(zeroText.contains("Detectedtargets0"));
+        assertTrue(zeroText.contains("Medianlocalizationduration(ms)Notavailable"));
+        assertFalse(zeroText.contains("StandardScanningresultsnotincluded"));
+        var noDetections = standardCopy("PRODUCER_REPORTED", null, 3, 0, 2, 1); byte[] noHitBytes = renderer.render(noDetections);
+        String noHitText = compact(text(noHitBytes));
+        assertTrue(noHitText.contains("Reportedattempts3")); assertTrue(noHitText.contains("Omissions2"));
+        assertTrue(noHitText.contains("Interruptions1")); assertTrue(noHitText.contains("Medianlocalizationduration(ms)Notavailable"));
+        var legacy = original(); String frozen = legacy.reportJson(); int peers = f.peers, writes = f.writes;
+        byte[] legacyBytes = renderer.render(legacy); String legacyText = compact(text(legacyBytes));
+        assertFalse(legacyText.contains("StandardScanning-reportedfinalresults")); assertFalse(legacyText.contains("Reportedattempts"));
+        assertEquals(frozen, legacy.reportJson()); assertEquals(peers, f.peers); assertEquals(writes, f.writes);
+        exportVisual(".standard-scanning-zero", zeroBytes); exportVisual(".standard-scanning-no-hits", noHitBytes); exportVisual(".standard-scanning-legacy", legacyBytes);
+    }
+
+    @Test void standardScanningSavedMedianUsesExactPlainDecimalWithoutDoubleRounding() throws Exception {
+        for (String median : List.of("1250", "1250.5", "9223372036854775806.5", "9223372036854775807")) {
+            var saved = standardCopy("PRODUCER_REPORTED", median, 1, 1, 0, 0);
+            String result = compact(text(renderer.render(saved)));
+            assertTrue(result.contains("Medianlocalizationduration(ms)" + median), "Saved median must remain an exact plain decimal");
+            assertFalse(result.contains("E+"));
+        }
+    }
+
+    @Test void malformedPresentStandardScanningFailsClosedWithoutMutationOrEnrichment() throws Exception {
+        var saved = standardCopy("SYNTHETIC", "1250.5", 6, 3, 2, 1);
+        for (int kind = 0; kind < 22; kind++) {
+            var json = (ObjectNode) f.mapper.readTree(saved.reportJson()); var summary = (ObjectNode) json.path("standardScanning");
+            switch (kind) {
+                case 21 -> json.set("visualSearch", summary.deepCopy());
+                case 0 -> json.putNull("standardScanning");
+                case 1 -> json.put("standardScanning", "invalid");
+                case 2 -> json.set("standardScanning", f.mapper.createObjectNode());
+                case 3 -> summary.put("extra", 1);
+                case 4 -> summary.put("calculationVersion", "unknown");
+                case 5 -> summary.put("dataOrigin", "UNKNOWN");
+                case 6 -> summary.put("reportedTrialCount", -1);
+                case 7 -> summary.put("reportedTrialCount", 7);
+                case 8 -> summary.put("eligibleLocalizationCount", 2);
+                case 9 -> summary.put("detectedTargetCount", 3.5);
+                case 10 -> summary.put("medianLocalizationDurationMs", "1250.5");
+                case 11 -> summary.putNull("medianLocalizationDurationMs");
+                case 12 -> summary.put("medianLocalizationDurationMs", -1);
+                case 13 -> summary.put("medianLocalizationDurationMs", 1.25);
+                case 14 -> summary.put("medianLocalizationDurationMs", new java.math.BigDecimal("9223372036854775808"));
+                case 15 -> summary.put("therapySessionId", new UUID(0, 99).toString());
+                case 16 -> summary.put("configurationId", new UUID(0, 99).toString());
+                case 17 -> summary.put("configurationVersion", 2);
+                case 18 -> json.put("mode", "SUSTAINED_TARGET_FIXATION");
+                case 19 -> ((ObjectNode) json.path("configuration")).put("configurationVersion", 2);
+                case 20 -> summary.remove("dataOrigin");
+            }
+            var bad = copy(saved, json); String frozen = bad.reportJson(); int peers = f.peers, writes = f.writes;
+            var error = assertThrows(IllegalStateException.class, () -> renderer.render(bad));
+            assertEquals("Session report PDF unavailable", error.getMessage()); assertNull(error.getCause());
+            assertEquals(frozen, bad.reportJson()); assertEquals(peers, f.peers); assertEquals(writes, f.writes);
+        }
+    }
+
+    @Test void standardScanningTableLeavesSavedHeatmapAndGazeGeometryUnchanged() throws Exception {
+        f.standardScanning = true;
+        var saved = gazeCopy(true, true, 1); byte[] without = renderer.render(saved);
+        var selected = standardCopy("SYNTHETIC", "1250.5", 6, 3, 2, 1);
+        var json = (ObjectNode) f.mapper.readTree(saved.reportJson());
+        json.set("standardScanning", f.mapper.readTree(selected.reportJson()).get("standardScanning"));
+        var combined = copy(saved, json); String frozen = combined.reportJson(); int peers = f.peers, writes = f.writes;
+        byte[] bytes = renderer.render(combined);
+        try (var before = Loader.loadPDF(without); var after = Loader.loadPDF(bytes)) {
+            assertEquals(gridCells(before), gridCells(after)); assertEquals(gazeMarks(before), gazeMarks(after));
+            assertEquals(gazeLines(before), gazeLines(after));
+            assertEquals(100, gridCells(after).size()); assertEquals(4, gazeMarks(after).size()); assertEquals(2, gazeLines(after).size());
+        }
+        assertTrue(text(bytes).contains("Standard Scanning - reported final results"));
+        assertEquals(frozen, combined.reportJson()); assertEquals(peers, f.peers); assertEquals(writes, f.writes);
+        exportVisual(".standard-scanning-combined", bytes);
+    }
+
     private String compact(String value) { return value.replaceAll("\\s", ""); }
     private void exportVisual(String suffix, byte[] bytes) throws Exception {
         String output = System.getProperty("clinical.pdf.visual-output");
@@ -48,7 +414,7 @@ class PdfBoxSessionReportRendererTest {
             for (int i = 0; i < doc.getNumberOfPages(); i++) {
                 var stripper = new PDFTextStripper(); stripper.setStartPage(i + 1); stripper.setEndPage(i + 1);
                 String page = stripper.getText(doc);
-                if (page.contains("Visual Search") || page.contains("Observed gaze-sample distribution") || page.contains("Estimated gaze-point trajectory"))
+                if (page.contains("Systematic Exploration") || page.contains("Traversal reference") || page.contains("Standard Scanning") || page.contains("Visual Search") || page.contains("Observed gaze-sample distribution") || page.contains("Estimated gaze-point trajectory"))
                     javax.imageio.ImageIO.write(raster.renderImageWithDPI(i, 110, ImageType.RGB), "png", java.nio.file.Path.of(output + suffix + "-page-" + (i + 1) + ".png").toFile());
             }
         }

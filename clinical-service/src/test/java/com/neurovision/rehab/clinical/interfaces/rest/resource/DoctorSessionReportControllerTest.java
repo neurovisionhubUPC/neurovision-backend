@@ -31,6 +31,9 @@ class DoctorSessionReportControllerTest {
     Identity doctorIdentity = new Identity(SUBJECT, Availability.AVAILABLE, "Synthetic", "Doctor", null, null);
     AssignedPatientNamesPort.Name patientName = new AssignedPatientNamesPort.Name("AVAILABLE", "Synthetic", "Patient");
     Observation observation = new ConfirmedNoEvidence(SESSION);
+    TherapeuticExerciseParameters reportParameters = TherapeuticConfigurationTestData.fixationSnapshot().parameters();
+    SessionReportStandardScanningPort.Summary scanningSummary = new SessionReportStandardScanningPort.Summary(
+            "standard-scanning-trial-v1",SESSION,CONFIG,2,SessionReportStandardScanningPort.Origin.SYNTHETIC,0,0,0,0,0,null);
 
     void called(String stage) {
         calls.add(stage);
@@ -44,9 +47,9 @@ class DoctorSessionReportControllerTest {
             }
             public Optional<Detail> observeDetail(UUID p, String d, UUID s) {
                 called("detail"); assertEquals(PATIENT, p); assertEquals(SUBJECT, d); assertEquals(SESSION, s);
-                var parameters = TherapeuticConfigurationTestData.fixationSnapshot().parameters();
+                var parameters = reportParameters;
                 return author && assigned ? Optional.of(new Detail(PATIENT,
-                        new Session(SESSION, PLAN, "fixation", status, START, "COMPLETED".equals(status) ? START.plusSeconds(120) : null,
+                        new Session(SESSION, PLAN, parameters.exercise().code().value(), status, START, "COMPLETED".equals(status) ? START.plusSeconds(120) : null,
                                 120, LocalDate.of(2026, 10, 1), CONFIG, 2, 1), parameters,
                         new SessionLimits(1, 10, 25), TechnicalProgress.notApplicable())) : Optional.empty();
             }
@@ -67,7 +70,9 @@ class DoctorSessionReportControllerTest {
             called("doctor"); assertEquals(SUBJECT, subject); assertEquals(TOKEN, token); return doctorIdentity;
         }, (session, token) -> {
             called("analytics"); assertEquals(SESSION, session); assertEquals(TOKEN, token); return observation;
-        }, Clock.fixed(START.plusSeconds(180), ZoneOffset.UTC));
+        }, (s,o,t) -> { fail("Visual Search not selected in this fixture"); return null; },
+        (s,o,t) -> { called("standard-scanning"); assertEquals(SESSION,s); assertEquals(TOKEN,t); return scanningSummary; },
+        Clock.fixed(START.plusSeconds(180), ZoneOffset.UTC));
     }
 
     SecurityIdentity identity(boolean anonymous, Set<String> roles, String subject, String token, boolean jwt) {
@@ -270,12 +275,132 @@ class DoctorSessionReportControllerTest {
         var context = type.getDeclaredField("uriInfo");
         assertEquals(jakarta.ws.rs.core.UriInfo.class, context.getType());
         assertNotNull(context.getAnnotation(jakarta.ws.rs.core.Context.class));
-        var method = type.getMethod("preview", String.class, String.class, String.class);
+        var method = type.getMethod("preview", String.class, String.class, String.class, String.class, String.class, String.class, String.class);
         assertNotNull(method.getAnnotation(jakarta.ws.rs.GET.class));
         assertEquals("visualSearchDataOrigin",method.getParameters()[2].getAnnotation(jakarta.ws.rs.QueryParam.class).value());
         assertArrayEquals(new String[]{"DOCTOR"}, method.getAnnotation(jakarta.annotation.security.RolesAllowed.class).value());
         assertEquals("clinicalPatientId", method.getParameters()[0].getAnnotation(jakarta.ws.rs.PathParam.class).value());
         assertEquals("therapySessionId", method.getParameters()[1].getAnnotation(jakarta.ws.rs.PathParam.class).value());
         assertNotNull(SessionReportResponse.class.getAnnotation(io.quarkus.runtime.annotations.RegisterForReflection.class));
+    }
+    @Test void scanningSelectionIsOptionalModeBoundAndProjectedWithoutRecalculation() {
+        reportParameters = ComposeStandardScanningReportServiceTest.standardScanningParameters();
+        var response = doctor().preview(PATIENT.toString(),SESSION.toString(),null,"SYNTHETIC");
+        assertEquals(200,response.getStatus()); var result = mapper.valueToTree(response.getEntity());
+        assertEquals(11,result.path("standardScanning").size()); assertTrue(result.path("standardScanning").path("medianLocalizationDurationMs").isNull());
+        assertFalse(result.has("visualSearch")); assertEquals("no-store",response.getHeaderString("Cache-Control"));
+        calls.clear(); var omitted = mapper.valueToTree(preview(doctor()).getEntity());
+        assertFalse(omitted.has("standardScanning")); assertFalse(calls.contains("standard-scanning"));
+    }
+    @Test void scanningInvalidAndSimultaneousSelectionsRejectBeforeEnrichment() throws Exception {
+        for (String raw : List.of("", "synthetic", " SYNTHETIC", "ALL"))
+            error(doctor().preview(PATIENT.toString(),SESSION.toString(),null,raw),400,"INVALID_REQUEST");
+        error(doctor().preview(PATIENT.toString(),SESSION.toString(),"SYNTHETIC","SYNTHETIC"),400,"INVALID_REQUEST");
+        assertTrue(calls.isEmpty());
+        var c = doctor(); var query = new jakarta.ws.rs.core.MultivaluedHashMap<String,String>();
+        query.putSingle("standardScanningDataOrigin", "");
+        var uri = Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args) -> { assertEquals("getQueryParameters",m.getName()); return query; });
+        var field = DoctorSessionReportController.class.getDeclaredField("uriInfo"); field.setAccessible(true); field.set(c,uri);
+        error(c.preview(PATIENT.toString(),SESSION.toString(),null,null),400,"INVALID_REQUEST"); assertTrue(calls.isEmpty());
+    }
+
+    @Test void fixationInvalidAndSimultaneousSelectionsRejectBeforeEnrichment() throws Exception {
+        for (String raw : List.of("", "synthetic", " SYNTHETIC", "ALL"))
+            error(doctor().preview(PATIENT.toString(),SESSION.toString(),null,null,raw),400,"INVALID_REQUEST");
+        error(doctor().preview(PATIENT.toString(),SESSION.toString(),"SYNTHETIC",null,"SYNTHETIC"),400,"INVALID_REQUEST");
+        assertTrue(calls.isEmpty());
+        var c = doctor(); var query = new jakarta.ws.rs.core.MultivaluedHashMap<String,String>();
+        query.putSingle("sustainedFixationDataOrigin", "");
+        var uri = Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args) -> { assertEquals("getQueryParameters",m.getName()); return query; });
+        var field = DoctorSessionReportController.class.getDeclaredField("uriInfo"); field.setAccessible(true); field.set(c,uri);
+        error(c.preview(PATIENT.toString(),SESSION.toString(),null,null,null),400,"INVALID_REQUEST"); assertTrue(calls.isEmpty());
+        query.putSingle("sustainedFixationDataOrigin","SYNTHETIC");
+        query.add("sustainedFixationDataOrigin","");
+        error(c.preview(PATIENT.toString(),SESSION.toString(),null,null,"SYNTHETIC"),400,"INVALID_REQUEST");
+    }
+
+    @Test void selectedFixationIsExposedAsEightFieldsAndOmittedByDefault() {
+        var f = new com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.Fixture();
+        f.echoFixationOrigin = true;
+        var c = new DoctorSessionReportController(f.composer(), identity(false, Set.of("DOCTOR"),
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.DOCTOR,
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.TOKEN,true),mapper);
+        var selected = c.preview(PATIENT.toString(),SESSION.toString(),null,null,"PRODUCER_REPORTED");
+        assertEquals(200,selected.getStatus());
+        var section = mapper.valueToTree(selected.getEntity()).path("sustainedFixation");
+        assertEquals(8,section.size());
+        assertEquals("PRODUCER_REPORTED",section.path("dataOrigin").textValue());
+        assertEquals(1000,section.path("totalInsideTargetMs").longValue());
+        assertFalse(mapper.valueToTree(c.preview(PATIENT.toString(),SESSION.toString()).getEntity()).has("sustainedFixation"));
+        assertEquals(1,f.fixationCalls);
+    }
+    @Test void saccadeInvalidAndSimultaneousSelectionsRejectBeforeEnrichment() throws Exception {
+        for (String raw : List.of("", "synthetic", " SYNTHETIC", "ALL"))
+            error(doctor().preview(PATIENT.toString(),SESSION.toString(),null,null,null,raw),400,"INVALID_REQUEST");
+        error(doctor().preview(PATIENT.toString(),SESSION.toString(),"SYNTHETIC",null,null,"SYNTHETIC"),400,"INVALID_REQUEST");
+        assertTrue(calls.isEmpty());
+        var c = doctor(); var query = new jakarta.ws.rs.core.MultivaluedHashMap<String,String>();
+        query.putSingle("compensatorySaccadeDataOrigin", "");
+        var uri = Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args) -> { assertEquals("getQueryParameters",m.getName()); return query; });
+        var field = DoctorSessionReportController.class.getDeclaredField("uriInfo"); field.setAccessible(true); field.set(c,uri);
+        error(c.preview(PATIENT.toString(),SESSION.toString(),null,null,null,null),400,"INVALID_REQUEST"); assertTrue(calls.isEmpty());
+        query.putSingle("compensatorySaccadeDataOrigin","SYNTHETIC");
+        query.add("compensatorySaccadeDataOrigin","");
+        error(c.preview(PATIENT.toString(),SESSION.toString(),null,null,null,"SYNTHETIC"),400,"INVALID_REQUEST");
+    }
+
+    @Test void selectedSaccadeIsExposedAsEightFieldsAndOmittedByDefault() {
+        var f = new com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.Fixture();
+        f.saccade = true; f.echoSaccadeOrigin = true;
+        var c = new DoctorSessionReportController(f.composer(), identity(false, Set.of("DOCTOR"),
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.DOCTOR,
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.TOKEN,true),mapper);
+        var selected = c.preview(PATIENT.toString(),SESSION.toString(),null,null,null,"PRODUCER_REPORTED");
+        assertEquals(200,selected.getStatus());
+        var section = mapper.valueToTree(selected.getEntity()).path("compensatorySaccade");
+        assertEquals(8,section.size());
+        assertEquals("PRODUCER_REPORTED",section.path("dataOrigin").textValue());
+        assertEquals(1000,section.path("medianTimeToTargetMs").longValue());
+        assertFalse(mapper.valueToTree(c.preview(PATIENT.toString(),SESSION.toString()).getEntity()).has("compensatorySaccade"));
+        assertEquals(1,f.saccadeCalls);
+    }
+    @Test void explorationInvalidAndSimultaneousSelectionsRejectBeforeEnrichment() throws Exception {
+        for (String raw : List.of("", "synthetic", " SYNTHETIC", "ALL"))
+            error(doctor().preview(PATIENT.toString(),SESSION.toString(),null,null,null,null,raw),400,"INVALID_REQUEST");
+        error(doctor().preview(PATIENT.toString(),SESSION.toString(),"SYNTHETIC",null,null,null,"SYNTHETIC"),400,"INVALID_REQUEST");
+        assertTrue(calls.isEmpty());
+        var c = doctor(); var query = new jakarta.ws.rs.core.MultivaluedHashMap<String,String>();
+        query.putSingle("systematicExplorationDataOrigin", "");
+        var uri = Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args) -> { assertEquals("getQueryParameters",m.getName()); return query; });
+        var field = DoctorSessionReportController.class.getDeclaredField("uriInfo"); field.setAccessible(true); field.set(c,uri);
+        error(c.preview(PATIENT.toString(),SESSION.toString(),null,null,null,null,null),400,"INVALID_REQUEST"); assertTrue(calls.isEmpty());
+        query.putSingle("systematicExplorationDataOrigin","SYNTHETIC");
+        query.add("systematicExplorationDataOrigin","");
+        error(c.preview(PATIENT.toString(),SESSION.toString(),null,null,null,null,"SYNTHETIC"),400,"INVALID_REQUEST");
+        for (var values:List.of(List.of("SYNTHETIC","SYNTHETIC"),List.of("","SYNTHETIC"),List.of("",""))) {
+            query.put("systematicExplorationDataOrigin",values);
+            error(c.preview(PATIENT.toString(),SESSION.toString(),null,null,null,null,values.getFirst()),400,"INVALID_REQUEST");
+        }
+        assertTrue(calls.isEmpty());
+    }
+
+    @Test void selectedExplorationIsExposedAsSevenFieldsAndOmittedByDefault() {
+        var f = new com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.Fixture();
+        f.exploration = true; f.echoExplorationOrigin = true;
+        var c = new DoctorSessionReportController(f.composer(), identity(false, Set.of("DOCTOR"),
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.DOCTOR,
+                com.neurovision.rehab.clinical.application.internal.commandservices.CreateSessionReportSnapshotServiceTest.TOKEN,true),mapper);
+        var selected = c.preview(PATIENT.toString(),SESSION.toString(),null,null,null,null,"PRODUCER_REPORTED");
+        assertEquals(200,selected.getStatus());
+        var section = mapper.valueToTree(selected.getEntity()).path("systematicExploration");
+        assertEquals(7,section.size());
+        assertEquals("PRODUCER_REPORTED",section.path("dataOrigin").textValue());
+        assertEquals(4000,section.path("traversals").get(0).path("elapsedMs").longValue());
+        assertFalse(mapper.valueToTree(c.preview(PATIENT.toString(),SESSION.toString()).getEntity()).has("systematicExploration"));
+        assertEquals(1,f.explorationCalls);
     }
 }

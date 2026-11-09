@@ -26,7 +26,12 @@ public final class PatientTherapyRestAssembler {
                 plan.dailyHardSafetyLimitMinutes().isPresent()
                         ? plan.dailyHardSafetyLimitMinutes().getAsInt() : null,
                 plan.minimumValidDurationMinutes(), plan.maximumSessionDurationMinutes(),
-                plan.minimumValidSampleCount(), Map.copyOf(prescriptions), configurations);
+                plan.minimumValidSampleCount(), Map.copyOf(prescriptions), configurations,
+                new PatientTherapyPlanResponse.DailyAvailability(view.dailyAvailability().quotaDate(),
+                        view.dailyAvailability().evaluatedAt(), view.dailyAvailability().remainingPlanSessionSlots(),
+                        view.dailyAvailability().exercises().stream().map(exercise -> new PatientTherapyPlanResponse.ExerciseAvailability(
+                                exercise.exerciseCode().value(), exercise.remainingPrescribedSlots(), exercise.status().name(),
+                                exercise.reason() == null ? null : exercise.reason().name())).toList()));
     }
 
     public static PatientTherapySessionResponse toResponse(TherapySession session, ObjectMapper mapper) {

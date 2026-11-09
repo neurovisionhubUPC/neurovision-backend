@@ -22,8 +22,7 @@ public final class JsonSessionReportSnapshotEncoder implements SessionReportSnap
     }
     public Origin visualSearchSelection(String savedReportJson, UUID expectedSession) {
         try {
-            JsonNode root = reader.readTree(savedReportJson);
-            if (root == null || !root.isObject()) throw new IllegalArgumentException();
+            JsonNode root = selectedRoot(savedReportJson);
             if (!root.has("visualSearch")) return null;
             var summary = VisualSearchReportJson.summary(root.get("visualSearch"));
             var execution = root.path("execution"); var configuration = root.path("configuration");
@@ -35,5 +34,76 @@ public final class JsonSessionReportSnapshotEncoder implements SessionReportSnap
                 throw new IllegalArgumentException();
             return summary.dataOrigin();
         } catch (Exception unavailable) { throw new IllegalStateException("Session report snapshot unavailable"); }
+    }
+    public com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin standardScanningSelection(String savedReportJson, UUID expectedSession) {
+        try {
+            JsonNode root = selectedRoot(savedReportJson);
+            if (!root.has("standardScanning")) return null;
+            var summary = StandardScanningReportJson.summary(root.get("standardScanning"));
+            var execution = root.path("execution"); var configuration = root.path("configuration");
+            if (!Objects.requireNonNull(expectedSession).equals(summary.therapySessionId())
+                    || !"STANDARD_SCANNING".equals(VisualSearchReportJson.text(root,"mode"))
+                    || !summary.therapySessionId().equals(VisualSearchReportJson.uuid(execution,"therapySessionId"))
+                    || !summary.configurationId().equals(VisualSearchReportJson.uuid(configuration,"configurationId"))
+                    || summary.configurationVersion() != VisualSearchReportJson.number(configuration,"configurationVersion"))
+                throw new IllegalArgumentException();
+            return summary.dataOrigin();
+        } catch (Exception unavailable) { throw new IllegalStateException("Session report snapshot unavailable"); }
+    }
+    public com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort.Origin sustainedFixationSelection(String savedReportJson, UUID expectedSession) {
+        try {
+            JsonNode root = selectedRoot(savedReportJson);
+            if (!root.has("sustainedFixation")) return null;
+            var summary = SustainedFixationReportJson.summary(root.get("sustainedFixation"));
+            var execution = root.path("execution"); var configuration = root.path("configuration");
+            if (!Objects.requireNonNull(expectedSession).equals(summary.therapySessionId())
+                    || !"SUSTAINED_TARGET_FIXATION".equals(VisualSearchReportJson.text(root,"mode"))
+                    || !summary.therapySessionId().equals(VisualSearchReportJson.uuid(execution,"therapySessionId"))
+                    || !summary.configurationId().equals(VisualSearchReportJson.uuid(configuration,"configurationId"))
+                    || summary.configurationVersion() != VisualSearchReportJson.number(configuration,"configurationVersion"))
+                throw new IllegalArgumentException();
+            return summary.dataOrigin();
+        } catch (Exception unavailable) { throw new IllegalStateException("Session report snapshot unavailable"); }
+    }
+
+    public com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort.Origin compensatorySaccadeSelection(String savedReportJson, UUID expectedSession) {
+        try {
+            JsonNode root = selectedRoot(savedReportJson);
+            if (!root.has("compensatorySaccade")) return null;
+            var summary = CompensatorySaccadeReportJson.summary(root.get("compensatorySaccade"));
+            var execution = root.path("execution"); var configuration = root.path("configuration");
+            if (!Objects.requireNonNull(expectedSession).equals(summary.therapySessionId())
+                    || !"COMPENSATORY_SACCADE".equals(VisualSearchReportJson.text(root,"mode"))
+                    || !summary.therapySessionId().equals(VisualSearchReportJson.uuid(execution,"therapySessionId"))
+                    || !summary.configurationId().equals(VisualSearchReportJson.uuid(configuration,"configurationId"))
+                    || summary.configurationVersion() != VisualSearchReportJson.number(configuration,"configurationVersion"))
+                throw new IllegalArgumentException();
+            return summary.dataOrigin();
+        } catch (Exception unavailable) { throw new IllegalStateException("Session report snapshot unavailable"); }
+    }
+
+    public com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort.Origin systematicExplorationSelection(String savedReportJson, UUID expectedSession) {
+        try {
+            JsonNode root = selectedRoot(savedReportJson);
+            if (!root.has("systematicExploration")) return null;
+            var summary = SystematicExplorationReportJson.summary(root.get("systematicExploration"));
+            var execution = root.path("execution"); var configuration = root.path("configuration");
+            if (!Objects.requireNonNull(expectedSession).equals(summary.therapySessionId())
+                    || !"SYSTEMATIC_EXPLORATION".equals(VisualSearchReportJson.text(root,"mode"))
+                    || !summary.therapySessionId().equals(VisualSearchReportJson.uuid(execution,"therapySessionId"))
+                    || !summary.configurationId().equals(VisualSearchReportJson.uuid(configuration,"configurationId"))
+                    || summary.configurationVersion() != VisualSearchReportJson.number(configuration,"configurationVersion"))
+                throw new IllegalArgumentException();
+            return summary.dataOrigin();
+        } catch (Exception unavailable) { throw new IllegalStateException("Session report snapshot unavailable"); }
+    }
+
+    private JsonNode selectedRoot(String savedReportJson) throws java.io.IOException {
+        JsonNode root = reader.readTree(savedReportJson);
+        if (root == null || !root.isObject()) throw new IllegalArgumentException();
+        int sections = (root.has("visualSearch") ? 1 : 0) + (root.has("standardScanning") ? 1 : 0)
+                + (root.has("sustainedFixation") ? 1 : 0) + (root.has("compensatorySaccade") ? 1 : 0) + (root.has("systematicExploration") ? 1 : 0);
+        if (sections > 1) throw new IllegalArgumentException();
+        return root;
     }
 }

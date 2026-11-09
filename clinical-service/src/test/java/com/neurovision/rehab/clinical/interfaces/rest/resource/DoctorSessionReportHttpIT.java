@@ -51,6 +51,7 @@ class DoctorSessionReportHttpIT {
     private static final ClinicalPatientId REVOKED = new ClinicalPatientId(new UUID(21, 2));
     private static final ClinicalPatientId SNAPSHOT_REVOKED = new ClinicalPatientId(new UUID(21, 3));
     private static final UUID OWNED_SESSION = new UUID(22, 1);
+    private static final UUID FIXATION_CONFIGURATION = new UUID(25, 1);
     private static final UUID FOREIGN_SESSION = new UUID(22, 2);
     private static final UUID REVOKED_SESSION = new UUID(22, 3);
     private static final UUID SNAPSHOT_REVOKED_SESSION = new UUID(22, 4);
@@ -61,6 +62,15 @@ class DoctorSessionReportHttpIT {
     private static final ClinicalPatientId VISUAL_SEARCH_REVOKED = new ClinicalPatientId(new UUID(21, 4));
     private static final UUID VISUAL_SEARCH_REVOKED_SESSION = new UUID(22, 9);
     private static final UUID VISUAL_SEARCH_CONFIGURATION = new UUID(25, 7);
+    private static final UUID STANDARD_SCANNING_SESSION = new UUID(22, 10);
+    private static final UUID FOREIGN_STANDARD_SCANNING_SESSION = new UUID(22, 11);
+    private static final ClinicalPatientId STANDARD_SCANNING_REVOKED = new ClinicalPatientId(new UUID(21, 5));
+    private static final UUID STANDARD_SCANNING_REVOKED_SESSION = new UUID(22, 12);
+    private static final UUID STANDARD_SCANNING_CONFIGURATION = new UUID(25, 10);
+    private static final UUID COMPENSATORY_SACCADE_SESSION = new UUID(22, 13);
+    private static final UUID COMPENSATORY_SACCADE_CONFIGURATION = new UUID(25, 13);
+    private static final UUID SYSTEMATIC_EXPLORATION_SESSION = new UUID(22, 14);
+    private static final UUID SYSTEMATIC_EXPLORATION_CONFIGURATION = new UUID(25, 14);
     private static final String SNAPSHOT_TABLE = "session_report_snapshots";
     private static final String NOTICE = "Sin evidencia analítica disponible";
 
@@ -120,6 +130,22 @@ class DoctorSessionReportHttpIT {
             seedSession(PATIENT, OTHER, FOREIGN_VISUAL_SEARCH_SESSION, 8, visualSearch);
             seedPatient(VISUAL_SEARCH_REVOKED, 4);
             seedSession(VISUAL_SEARCH_REVOKED, DOCTOR, VISUAL_SEARCH_REVOKED_SESSION, 9, visualSearch);
+            var scanning = new TherapeuticExerciseParameters.VisualScanning(
+                    TherapeuticExerciseParameters.VisualScanningMode.STANDARD_SCANNING,
+                    TherapeuticExerciseParameters.AffectedHemifield.LEFT, 500, 3000, 10, 50, 5, 500, 1);
+            seedSession(PATIENT, DOCTOR, STANDARD_SCANNING_SESSION, 10, scanning);
+            seedSession(PATIENT, OTHER, FOREIGN_STANDARD_SCANNING_SESSION, 11, scanning);
+            seedPatient(STANDARD_SCANNING_REVOKED, 5);
+            seedSession(STANDARD_SCANNING_REVOKED, DOCTOR, STANDARD_SCANNING_REVOKED_SESSION, 12, scanning);
+            var saccade = new TherapeuticExerciseParameters.VisualScanning(
+                    TherapeuticExerciseParameters.VisualScanningMode.COMPENSATORY_SACCADE,
+                    TherapeuticExerciseParameters.AffectedHemifield.LEFT, 500, 3000, 10, 50, 5, 500, 1);
+            seedSession(PATIENT, DOCTOR, COMPENSATORY_SACCADE_SESSION, 13, saccade);
+            var exploration = new TherapeuticExerciseParameters.VisualScanning(
+                    TherapeuticExerciseParameters.VisualScanningMode.SYSTEMATIC_EXPLORATION,
+                    TherapeuticExerciseParameters.AffectedHemifield.LEFT, 500, 3000, 10, 50, 5, 500, 1);
+            seedSession(PATIENT, DOCTOR, SYSTEMATIC_EXPLORATION_SESSION, 14, exploration);
+
             entities.flush();
         });
         seedHeatmapCopy();
@@ -478,6 +504,23 @@ class DoctorSessionReportHttpIT {
                     "The older omitted copy requires its explicit not-included notice");
             assertFalse(text.contains("Reportedattempts") || text.contains("Mediansearchduration(ms)"),
                     "An omitted Visual Search section must not fabricate zero results");
+            assertFalse(text.contains("StandardScanning-reportedfinalresults") || text.contains("Medianlocalizationduration(ms)"),
+                    "An older omitted copy must not gain a Standard Scanning table or fabricated results");
+            assertFalse(copy.path("report").has("sustainedFixation"), "This fixture must omit Sustained Fixation");
+            assertFalse(text.contains("SustainedFixation-reportedfinalresults")
+                    || text.contains("Totalvalidtimeinsidethetarget(ms)") || text.contains("Completedtargets"),
+                    "An older omitted copy must not gain a Sustained Fixation table or fabricated results");
+            assertFalse(copy.path("report").has("compensatorySaccade"),
+                    "This fixture must omit Compensatory Saccade");
+            assertFalse(text.contains("CompensatorySaccade-reportedfinalresults")
+                    || text.contains("Reachedtargets") || text.contains("Mediantimetotarget(ms)"),
+                    "An older omitted copy must not gain a Compensatory Saccade table or fabricated results");
+            assertFalse(copy.path("report").has("systematicExploration"),
+                    "This fixture must omit Systematic Exploration");
+            assertFalse(text.contains("SystematicExploration-reportedfinalresults")
+                    || text.contains("Reportedtraversals") || text.contains("Traversalreference")
+                    || text.contains("Visitedregions") || text.contains("Coverage(%)") || text.contains("Elapsedduration(ms)"),
+                    "An older omitted copy must not gain a Systematic Exploration table or invented results");
             assertFalse(text.contains(accessToken), "PDF must not contain a bearer token");
             assertFalse(text.contains(DOCTOR.value()), "PDF must not contain a Cognito subject");
             for (var page : pdf.getPages()) for (var name : page.getResources().getFontNames())
@@ -601,6 +644,729 @@ class DoctorSessionReportHttpIT {
         pdfError(getPdf(accessToken, PATIENT, OWNED_SESSION, id), 404, "NOT_FOUND");
         for (String invalid : List.of("bad", "1-1-1-1-1", "00000000-0000-0000-0000-00000000000A"))
             pdfError(getPdf(accessToken, PATIENT, OWNED_SESSION, invalid), 400, "INVALID_REQUEST");
+    }
+
+    @Test void sustainedFixationPreviewSelectsMetricsOnlyWhenRequested() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            fixationScenario(origin, false);
+            var response = fixationRequest("sustainedFixationDataOrigin=" + origin, null);
+            assertEquals(200, response.statusCode());
+            assertEquals("no-store", response.header("Cache-Control"));
+            assertFixationSummary(mapper.readTree(response.asString()), origin);
+            counts(1, 1, 1);
+            fixationReads(1);
+        }
+        fixationScenario("SYNTHETIC", false);
+        var omitted = fixationRequest("", null);
+        assertEquals(200, omitted.statusCode());
+        assertEquals("no-store", omitted.header("Cache-Control"));
+        assertFalse(mapper.readTree(omitted.asString()).has("sustainedFixation"));
+        counts(1, 1, 1);
+        fixationReads(0);
+    }
+
+    @Test void sustainedFixationRejectsInvalidRepeatedAndCombinedSelectorsBeforePeersOrWrites() throws Exception {
+        fixationScenario("SYNTHETIC", false);
+        for (String query : List.of("sustainedFixationDataOrigin=", "sustainedFixationDataOrigin=synthetic",
+                "sustainedFixationDataOrigin=SYNTHETIC&sustainedFixationDataOrigin=",
+                "sustainedFixationDataOrigin=SYNTHETIC&sustainedFixationDataOrigin=SYNTHETIC",
+                "sustainedFixationDataOrigin=SYNTHETIC&visualSearchDataOrigin=SYNTHETIC",
+                "sustainedFixationDataOrigin=SYNTHETIC&standardScanningDataOrigin=SYNTHETIC")) {
+            resourceError(fixationRequest(query, null), 400, "SESSION_REPORT_INVALID_REQUEST");
+            assertUnchanged();
+            counts(0, 0, 0);
+            fixationReads(0);
+            snapshotError(fixationRequest(query, "http-fixation-invalid"), 400, "INVALID_REQUEST");
+            fixationReads(0);
+        }
+    }
+
+    @Test void sustainedFixationReplayReturnsTheFrozenCopyWithoutPeers() throws Exception {
+        String origin = "SYNTHETIC";
+        String selector = "sustainedFixationDataOrigin=" + origin;
+        String key = "http-fixation-frozen";
+        fixationScenario(origin, false);
+        assertUnchanged();
+        var copy = assertCreatedCopy(fixationRequest(selector, key), PATIENT, OWNED_SESSION, key,
+                report -> assertFixationSummary(report, origin));
+        counts(1, 1, 1);
+        fixationReads(1);
+
+        fixationScenario(origin, true);
+        String id = copy.path("reportSnapshotId").asText();
+        var download = getPdf(accessToken, PATIENT, OWNED_SESSION, id);
+        assertUnchanged();
+        assertEquals(200, download.statusCode());
+        assertEquals("application/pdf", download.contentType());
+        assertEquals("no-store", download.header("Cache-Control"));
+        var saved = copy.path("report").path("sustainedFixation");
+        try (var pdf = Loader.loadPDF(download.asByteArray())) {
+            String text = new PDFTextStripper().getText(pdf).replaceAll("\\s", "");
+            assertTrue(text.contains(id), "PDF must identify the saved copy");
+            String table = "SustainedFixation-reportedfinalresults"
+                    + "Dataorigin" + saved.path("dataOrigin").asText()
+                    + "Calculationversion" + saved.path("calculationVersion").asText()
+                    + "Reportedattempts" + saved.path("reportedTrialCount").asText()
+                    + "Totalvalidtimeinsidethetarget(ms)" + saved.path("totalInsideTargetMs").asText()
+                    + "Completedtargets" + saved.path("completedTargetCount").asText()
+                    + "Meaning";
+            assertTrue(text.contains(table), "PDF must display the exact frozen Sustained Fixation rows");
+            assertTrue(text.contains("SYNTHETIC:testdata,notpatientevidence."),
+                    "PDF must retain the saved synthetic origin limitation");
+        }
+        counts(0, 0, 0);
+        fixationReads(0);
+
+        var replay = fixationRequest(selector, key);
+        assertUnchanged();
+        assertEquals(200, replay.statusCode());
+        assertEquals("no-store", replay.header("Cache-Control"));
+        assertTrue(replay.contentType().startsWith("application/json"));
+        assertNull(replay.header("Location"));
+        assertTrue(copy.equals(mapper.readTree(replay.asString())), "Replay must return the saved copy");
+        counts(0, 0, 0);
+        fixationReads(0);
+
+        snapshotError(fixationRequest("sustainedFixationDataOrigin=PRODUCER_REPORTED", key), 409, "SELECTION_CONFLICT");
+        getCopy(PATIENT, OWNED_SESSION, copy);
+        counts(0, 0, 0);
+        fixationReads(0);
+    }
+
+    private Response fixationRequest(String query, String key) {
+        var request = given().baseUri("http://127.0.0.1").port(http.getPort()).redirects().follow(false)
+                .header("Authorization", "Bearer " + accessToken);
+        String suffix = query.isEmpty() ? "" : "?" + query;
+        if (key != null) return request.header("Idempotency-Key", key).post(snapshotPath(PATIENT, OWNED_SESSION) + suffix);
+        return request.get("/api/v1/clinical-patients/" + PATIENT.value()
+                + "/therapy-sessions/" + OWNED_SESSION + "/report-preview" + suffix);
+    }
+
+    private void fixationScenario(String origin, boolean unavailable) {
+        peers.scenario(PATIENT.value(), OWNED_SESSION, accessToken, unavailable, unavailable);
+        peers.sustainedFixationScenario(FIXATION_CONFIGURATION, origin, unavailable);
+    }
+
+    private void fixationReads(int expected) {
+        assertEquals(expected, peers.sustainedFixationCount());
+        assertEquals(0, peers.visualSearchCount());
+        assertEquals(0, peers.standardScanningCount());
+    }
+
+    private void assertFixationSummary(JsonNode report, String origin) {
+        assertEquals("SUSTAINED_TARGET_FIXATION", report.path("mode").asText());
+        assertFalse(report.has("visualSearch"));
+        assertFalse(report.has("standardScanning"));
+        var expected = mapper.createObjectNode().put("calculationVersion", "sustained-fixation-trial-v1")
+                .put("therapySessionId", OWNED_SESSION.toString()).put("configurationId", FIXATION_CONFIGURATION.toString())
+                .put("configurationVersion", 1).put("dataOrigin", origin)
+                .put("reportedTrialCount", 3).put("totalInsideTargetMs", 4200).put("completedTargetCount", 2);
+        assertEquals(expected, report.path("sustainedFixation"));
+        assertEquals(expected.path("therapySessionId"), report.path("execution").path("therapySessionId"));
+        assertEquals(expected.path("configurationId"), report.path("configuration").path("configurationId"));
+        assertEquals(1, report.path("configuration").path("configurationVersion").asLong());
+    }
+
+    @Test void compensatorySaccadePreviewSelectsMetricsOnlyWhenRequested() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            saccadeScenario(origin, false);
+            var response = saccadeRequest("compensatorySaccadeDataOrigin=" + origin, null);
+            assertEquals(200, response.statusCode());
+            assertEquals("no-store", response.header("Cache-Control"));
+            assertSaccadeSummary(mapper.readTree(response.asString()), origin);
+            counts(1, 1, 1);
+            saccadeReads(1);
+        }
+        saccadeScenario("SYNTHETIC", false);
+        var omitted = saccadeRequest("", null);
+        assertEquals(200, omitted.statusCode());
+        assertEquals("no-store", omitted.header("Cache-Control"));
+        assertFalse(mapper.readTree(omitted.asString()).has("compensatorySaccade"));
+        counts(1, 1, 1);
+        saccadeReads(0);
+        assertUnchanged();
+    }
+
+    @Test void compensatorySaccadeRejectsInvalidRepeatedAndCombinedSelectorsBeforePeersOrWrites() throws Exception {
+        saccadeScenario("SYNTHETIC", false);
+        for (String query : List.of("compensatorySaccadeDataOrigin=", "compensatorySaccadeDataOrigin=synthetic",
+                "compensatorySaccadeDataOrigin=SYNTHETIC&compensatorySaccadeDataOrigin=",
+                "compensatorySaccadeDataOrigin=SYNTHETIC&compensatorySaccadeDataOrigin=SYNTHETIC",
+                "compensatorySaccadeDataOrigin=SYNTHETIC&visualSearchDataOrigin=SYNTHETIC",
+                "compensatorySaccadeDataOrigin=SYNTHETIC&standardScanningDataOrigin=SYNTHETIC",
+                "compensatorySaccadeDataOrigin=SYNTHETIC&sustainedFixationDataOrigin=SYNTHETIC")) {
+            resourceError(saccadeRequest(query, null), 400, "SESSION_REPORT_INVALID_REQUEST");
+            assertUnchanged();
+            counts(0, 0, 0);
+            saccadeReads(0);
+            snapshotError(saccadeRequest(query, "http-saccade-invalid"), 400, "INVALID_REQUEST");
+            saccadeReads(0);
+        }
+        peers.scenario(PATIENT.value(), OWNED_SESSION, accessToken, false, false);
+        String selector = "compensatorySaccadeDataOrigin=SYNTHETIC";
+        resourceError(saccadeRequest(OWNED_SESSION, selector, null), 400, "SESSION_REPORT_INVALID_REQUEST");
+        assertUnchanged();
+        counts(0, 0, 0);
+        saccadeReads(0);
+        snapshotError(saccadeRequest(OWNED_SESSION, selector, "http-saccade-wrong-mode"), 400, "INVALID_REQUEST");
+        saccadeReads(0);
+    }
+
+    @Test void compensatorySaccadeReplayReturnsTheFrozenCopyWithoutPeers() throws Exception {
+        String origin = "SYNTHETIC";
+        String selector = "compensatorySaccadeDataOrigin=" + origin;
+        String key = "http-saccade-frozen";
+        saccadeScenario(origin, false);
+        assertUnchanged();
+        var copy = assertCreatedCopy(saccadeRequest(selector, key), PATIENT, COMPENSATORY_SACCADE_SESSION, key,
+                report -> assertSaccadeSummary(report, origin));
+        counts(1, 1, 1);
+        saccadeReads(1);
+
+        saccadeScenario(origin, true);
+        String id = copy.path("reportSnapshotId").asText();
+        var download = getPdf(accessToken, PATIENT, COMPENSATORY_SACCADE_SESSION, id);
+        assertUnchanged();
+        assertEquals(200, download.statusCode());
+        assertEquals("application/pdf", download.contentType());
+        assertEquals("no-store", download.header("Cache-Control"));
+        assertEquals("attachment; filename=\"session-report-" + id + ".pdf\"", download.header("Content-Disposition"));
+        byte[] bytes = download.asByteArray();
+        assertTrue(bytes.length > 5 && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D'
+                && bytes[3] == 'F' && bytes[4] == '-', "Successful download must contain a PDF document");
+        var saved = copy.path("report").path("compensatorySaccade");
+        try (var pdf = Loader.loadPDF(bytes)) {
+            assertTrue(pdf.getNumberOfPages() > 0, "PDF requires readable pages");
+            String text = new PDFTextStripper().getText(pdf).replaceAll("\\s", "");
+            assertTrue(text.contains(id), "PDF must identify the saved copy");
+            assertTrue(text.contains(copy.path("createdAt").asText()), "PDF must retain the copy creation time");
+            String table = "CompensatorySaccade-reportedfinalresults"
+                    + "Dataorigin" + saved.path("dataOrigin").asText()
+                    + "Calculationversion" + saved.path("calculationVersion").asText()
+                    + "Reportedattempts" + saved.path("reportedTrialCount").asText()
+                    + "Reachedtargets" + saved.path("reachedTargetCount").asText()
+                    + "Mediantimetotarget(ms)" + saved.path("medianTimeToTargetMs").asText()
+                    + "Meaning";
+            assertTrue(text.contains(table), "PDF must display the exact frozen Compensatory Saccade rows");
+            assertTrue(text.contains("Successfulattemptsonly;includesconfirmationdwell"),
+                    "PDF must explain the saved median");
+            assertTrue(text.contains("SYNTHETIC:testdata,notpatientevidence."),
+                    "PDF must retain the saved synthetic origin limitation");
+            assertTrue(text.contains("notadiagnosis"), "PDF requires the non-diagnostic notice");
+        }
+        counts(0, 0, 0);
+        saccadeReads(0);
+
+        var replay = saccadeRequest(selector, key);
+        assertUnchanged();
+        assertEquals(200, replay.statusCode());
+        assertEquals("no-store", replay.header("Cache-Control"));
+        assertTrue(replay.contentType().startsWith("application/json"));
+        assertNull(replay.header("Location"));
+        assertTrue(copy.equals(mapper.readTree(replay.asString())), "Replay must return the saved copy");
+        counts(0, 0, 0);
+        saccadeReads(0);
+
+        snapshotError(saccadeRequest("compensatorySaccadeDataOrigin=PRODUCER_REPORTED", key), 409, "SELECTION_CONFLICT");
+        snapshotError(saccadeRequest("", key), 409, "SELECTION_CONFLICT");
+        getCopy(PATIENT, COMPENSATORY_SACCADE_SESSION, copy);
+        counts(0, 0, 0);
+        saccadeReads(0);
+    }
+
+    private Response saccadeRequest(String query, String key) {
+        return saccadeRequest(COMPENSATORY_SACCADE_SESSION, query, key);
+    }
+
+    private Response saccadeRequest(UUID session, String query, String key) {
+        var request = given().baseUri("http://127.0.0.1").port(http.getPort()).redirects().follow(false)
+                .header("Authorization", "Bearer " + accessToken);
+        String suffix = query.isEmpty() ? "" : "?" + query;
+        if (key != null) return request.header("Idempotency-Key", key).post(snapshotPath(PATIENT, session) + suffix);
+        return request.get("/api/v1/clinical-patients/" + PATIENT.value()
+                + "/therapy-sessions/" + session + "/report-preview" + suffix);
+    }
+
+    private void saccadeScenario(String origin, boolean unavailable) {
+        peers.scenario(PATIENT.value(), COMPENSATORY_SACCADE_SESSION, accessToken, unavailable, unavailable);
+        peers.compensatorySaccadeScenario(COMPENSATORY_SACCADE_CONFIGURATION, origin, unavailable);
+    }
+
+    private void saccadeReads(int expected) {
+        assertEquals(expected, peers.compensatorySaccadeCount());
+        assertEquals(0, peers.visualSearchCount());
+        assertEquals(0, peers.standardScanningCount());
+        assertEquals(0, peers.sustainedFixationCount());
+    }
+
+    private void assertSaccadeSummary(JsonNode report, String origin) {
+        assertEquals("COMPENSATORY_SACCADE", report.path("mode").asText());
+        assertFalse(report.has("visualSearch"));
+        assertFalse(report.has("standardScanning"));
+        assertFalse(report.has("sustainedFixation"));
+        var expected = mapper.createObjectNode().put("calculationVersion", "compensatory-saccade-trial-v1")
+                .put("therapySessionId", COMPENSATORY_SACCADE_SESSION.toString()).put("configurationId", COMPENSATORY_SACCADE_CONFIGURATION.toString())
+                .put("configurationVersion", 1).put("dataOrigin", origin)
+                .put("reportedTrialCount", 3).put("reachedTargetCount", 2).put("medianTimeToTargetMs", 1250.5);
+        assertEquals(expected, report.path("compensatorySaccade"));
+        assertEquals(expected.path("therapySessionId"), report.path("execution").path("therapySessionId"));
+        assertEquals(expected.path("configurationId"), report.path("configuration").path("configurationId"));
+        assertEquals(1, report.path("configuration").path("configurationVersion").asLong());
+    }
+
+    @Test void systematicExplorationPreviewPreservesSelectionOmissionAndConfirmedEmpty() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            explorationScenario(origin, SessionReportPeersTestResource.SystematicExplorationScenario.OBSERVED, false, false);
+            var response = explorationRequest("systematicExplorationDataOrigin=" + origin, null);
+            assertEquals(200, response.statusCode());
+            assertEquals("no-store", response.header("Cache-Control"));
+            assertExplorationSummary(mapper.readTree(response.asString()), origin, false);
+            counts(1, 1, 1);
+            explorationReads(1);
+            assertUnchanged();
+        }
+        explorationScenario("SYNTHETIC", SessionReportPeersTestResource.SystematicExplorationScenario.OBSERVED, false, false);
+        var omitted = explorationRequest("", null);
+        assertEquals(200, omitted.statusCode());
+        assertEquals("no-store", omitted.header("Cache-Control"));
+        var report = mapper.readTree(omitted.asString());
+        assertEquals("SYSTEMATIC_EXPLORATION", report.path("mode").asText());
+        assertFalse(report.has("systematicExploration"));
+        counts(1, 1, 1);
+        explorationReads(0);
+        assertUnchanged();
+
+        explorationScenario("SYNTHETIC", SessionReportPeersTestResource.SystematicExplorationScenario.ZERO, false, false);
+        var empty = explorationRequest("systematicExplorationDataOrigin=SYNTHETIC", null);
+        assertEquals(200, empty.statusCode());
+        assertEquals("no-store", empty.header("Cache-Control"));
+        assertExplorationSummary(mapper.readTree(empty.asString()), "SYNTHETIC", true);
+        counts(1, 1, 1);
+        explorationReads(1);
+        assertUnchanged();
+    }
+
+    @Test void systematicExplorationRejectsInvalidSelectionsAndDoesNotHideSourceFailures() throws Exception {
+        String selector = "systematicExplorationDataOrigin=SYNTHETIC";
+        var invalid = new ArrayList<>(List.of("systematicExplorationDataOrigin=", "systematicExplorationDataOrigin=ALL",
+                "systematicExplorationDataOrigin=synthetic", selector + "&systematicExplorationDataOrigin=",
+                "systematicExplorationDataOrigin=&" + selector, selector + "&" + selector,
+                "systematicExplorationDataOrigin=&systematicExplorationDataOrigin="));
+        for (String other : List.of("visualSearchDataOrigin", "standardScanningDataOrigin",
+                "sustainedFixationDataOrigin", "compensatorySaccadeDataOrigin"))
+            invalid.add(selector + "&" + other + "=SYNTHETIC");
+        explorationScenario("SYNTHETIC", SessionReportPeersTestResource.SystematicExplorationScenario.OBSERVED, false, false);
+        for (String query : invalid) {
+            resourceError(explorationRequest(query, null), 400, "SESSION_REPORT_INVALID_REQUEST");
+            counts(0, 0, 0); explorationReads(0); assertUnchanged();
+            snapshotError(explorationRequest(query, "http-exploration-invalid"), 400, "INVALID_REQUEST");
+            counts(0, 0, 0); explorationReads(0); assertUnchanged();
+        }
+        resourceError(explorationRequest(OWNED_SESSION, selector, null), 400, "SESSION_REPORT_INVALID_REQUEST");
+        counts(0, 0, 0); explorationReads(0); assertUnchanged();
+        snapshotError(explorationRequest(OWNED_SESSION, selector, "http-exploration-wrong-mode"), 400, "INVALID_REQUEST");
+        counts(0, 0, 0); explorationReads(0); assertUnchanged();
+
+        // A dependency failure or inconsistent binding is never confirmed empty evidence.
+        for (int failure = 0; failure < 2; failure++) {
+            for (boolean copy : List.of(false, true)) {
+                explorationScenario("SYNTHETIC", SessionReportPeersTestResource.SystematicExplorationScenario.OBSERVED,
+                        failure == 0, failure == 1);
+                var response = explorationRequest(selector, copy ? "http-exploration-peer-failure" : null);
+                if (copy) resourceError(response, 503, "SESSION_REPORT_SNAPSHOT_UNAVAILABLE");
+                else resourceError(response, 503, "SESSION_REPORT_UNAVAILABLE");
+                counts(1, 1, failure == 0 ? 0 : 1);
+                explorationReads(0);
+                assertUnchanged();
+            }
+        }
+        for (var scenario : List.of(SessionReportPeersTestResource.SystematicExplorationScenario.UNAVAILABLE,
+                SessionReportPeersTestResource.SystematicExplorationScenario.WRONG_SESSION,
+                SessionReportPeersTestResource.SystematicExplorationScenario.WRONG_CONFIGURATION,
+                SessionReportPeersTestResource.SystematicExplorationScenario.WRONG_VERSION,
+                SessionReportPeersTestResource.SystematicExplorationScenario.WRONG_ORIGIN,
+                SessionReportPeersTestResource.SystematicExplorationScenario.MALFORMED)) {
+            for (boolean copy : List.of(false, true)) {
+                explorationScenario("SYNTHETIC", scenario, false, false);
+                var response = explorationRequest(selector, copy ? "http-exploration-summary-failure" : null);
+                if (copy) resourceError(response, 503, "SESSION_REPORT_SNAPSHOT_UNAVAILABLE");
+                else resourceError(response, 503, "SESSION_REPORT_UNAVAILABLE");
+                counts(1, 1, 1);
+                explorationReads(1);
+                assertUnchanged();
+            }
+        }
+    }
+
+    @Test void systematicExplorationReplayReturnsTheFrozenCopyWithoutPeers() throws Exception {
+        String origin = "SYNTHETIC";
+        String selector = "systematicExplorationDataOrigin=" + origin;
+        String key = "http-exploration-frozen";
+        explorationScenario(origin, SessionReportPeersTestResource.SystematicExplorationScenario.OBSERVED, false, false);
+        var copy = assertCreatedCopy(explorationRequest(selector, key), PATIENT, SYSTEMATIC_EXPLORATION_SESSION, key,
+                report -> assertExplorationSummary(report, origin, false));
+        counts(1, 1, 1);
+        explorationReads(1);
+
+        explorationScenario(origin, SessionReportPeersTestResource.SystematicExplorationScenario.UNAVAILABLE, true, true);
+        String id = copy.path("reportSnapshotId").asText();
+        var download = getPdf(accessToken, PATIENT, SYSTEMATIC_EXPLORATION_SESSION, id);
+        assertUnchanged();
+        counts(0, 0, 0); explorationReads(0);
+        assertEquals(200, download.statusCode());
+        assertEquals("application/pdf", download.contentType());
+        assertEquals("no-store", download.header("Cache-Control"));
+        assertEquals("attachment; filename=\"session-report-" + id + ".pdf\"", download.header("Content-Disposition"));
+        byte[] bytes = download.asByteArray();
+        assertTrue(bytes.length > 5 && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D'
+                && bytes[3] == 'F' && bytes[4] == '-', "Successful download must contain a PDF document");
+        var saved = copy.path("report").path("systematicExploration");
+        try (var pdf = Loader.loadPDF(bytes)) {
+            assertTrue(pdf.getNumberOfPages() > 0, "PDF requires readable pages");
+            String text = new PDFTextStripper().getText(pdf).replaceAll("\\s", "");
+            assertTrue(text.contains(id) && text.contains(copy.path("createdAt").asText()),
+                    "PDF must retain the saved copy reference and creation time");
+            String header = "SystematicExploration-reportedfinalresults"
+                    + "Dataorigin" + saved.path("dataOrigin").asText()
+                    + "Calculationversion" + saved.path("calculationVersion").asText()
+                    + "Reportedtraversals" + saved.path("reportedTrialCount").asText();
+            assertTrue(text.contains(header), "PDF must display the frozen Systematic Exploration provenance");
+            assertEquals(saved.path("traversals").size(), text.split("Traversalreference", -1).length - 1);
+            int previous = -1;
+            for (var traversal : saved.path("traversals")) {
+                String row = "Traversalreference" + traversal.path("trialId").asText()
+                        + "Outcome" + traversal.path("outcome").asText()
+                        + "Visitedregions" + traversal.path("visitedRegionCount").asText() + "of4"
+                        + "Coverage(%)" + traversal.path("coveragePercent").asText()
+                        + "Elapsedduration(ms)" + traversal.path("elapsedMs").asText();
+                int position = text.indexOf(row);
+                assertTrue(position > previous, "PDF must retain every frozen traversal value in saved order");
+                previous = position;
+            }
+            assertTrue(text.contains("SYNTHETIC:testdata,notpatientevidence."),
+                    "PDF requires the saved synthetic-origin limitation");
+            assertTrue(text.contains("notadiagnosis") && text.contains("notproofofclinicalefficacy"),
+                    "PDF must not imply diagnosis or clinical efficacy");
+            assertFalse(text.contains(accessToken), "PDF must not contain a bearer token");
+            assertFalse(text.contains(DOCTOR.value()), "PDF must not contain a Cognito subject");
+        }
+        getCopy(PATIENT, SYSTEMATIC_EXPLORATION_SESSION, copy);
+        counts(0, 0, 0); explorationReads(0);
+        var replay = explorationRequest(selector, key);
+        assertEquals(200, replay.statusCode());
+        assertEquals("no-store", replay.header("Cache-Control"));
+        assertTrue(replay.contentType().startsWith("application/json"));
+        assertNull(replay.header("Location"));
+        assertTrue(copy.equals(mapper.readTree(replay.asString())), "Replay must return the frozen copy");
+        assertUnchanged();
+        counts(0, 0, 0); explorationReads(0);
+        snapshotError(explorationRequest("systematicExplorationDataOrigin=PRODUCER_REPORTED", key), 409, "SELECTION_CONFLICT");
+        assertUnchanged(); counts(0, 0, 0); explorationReads(0);
+        snapshotError(explorationRequest("", key), 409, "SELECTION_CONFLICT");
+        assertUnchanged(); counts(0, 0, 0); explorationReads(0);
+        getCopy(PATIENT, SYSTEMATIC_EXPLORATION_SESSION, copy);
+        assertUnchanged(); counts(0, 0, 0); explorationReads(0);
+    }
+
+    private Response explorationRequest(String query, String key) {
+        return explorationRequest(SYSTEMATIC_EXPLORATION_SESSION, query, key);
+    }
+
+    private Response explorationRequest(UUID session, String query, String key) {
+        var request = given().baseUri("http://127.0.0.1").port(http.getPort()).redirects().follow(false)
+                .header("Authorization", "Bearer " + accessToken);
+        String suffix = query.isEmpty() ? "" : "?" + query;
+        if (key != null) return request.header("Idempotency-Key", key).post(snapshotPath(PATIENT, session) + suffix);
+        return request.get("/api/v1/clinical-patients/" + PATIENT.value()
+                + "/therapy-sessions/" + session + "/report-preview" + suffix);
+    }
+
+    private void explorationScenario(String origin, SessionReportPeersTestResource.SystematicExplorationScenario scenario,
+            boolean profileFailure, boolean analyticsFailure) {
+        peers.scenario(PATIENT.value(), SYSTEMATIC_EXPLORATION_SESSION, accessToken, profileFailure, analyticsFailure);
+        peers.systematicExplorationScenario(SYSTEMATIC_EXPLORATION_CONFIGURATION, origin, scenario);
+    }
+
+    private void explorationReads(int expected) {
+        assertEquals(expected, peers.systematicExplorationCount());
+        assertEquals(0, peers.visualSearchCount());
+        assertEquals(0, peers.standardScanningCount());
+        assertEquals(0, peers.sustainedFixationCount());
+        assertEquals(0, peers.compensatorySaccadeCount());
+    }
+
+    private void assertExplorationSummary(JsonNode report, String origin, boolean empty) {
+        assertEquals("SYSTEMATIC_EXPLORATION", report.path("mode").asText());
+        assertFalse(report.has("visualSearch")); assertFalse(report.has("standardScanning"));
+        assertFalse(report.has("sustainedFixation")); assertFalse(report.has("compensatorySaccade"));
+        var expected = mapper.createObjectNode().put("calculationVersion", "systematic-exploration-trial-v1")
+                .put("therapySessionId", SYSTEMATIC_EXPLORATION_SESSION.toString())
+                .put("configurationId", SYSTEMATIC_EXPLORATION_CONFIGURATION.toString())
+                .put("configurationVersion", 1).put("dataOrigin", origin).put("reportedTrialCount", empty ? 0 : 3);
+        var rows = expected.putArray("traversals");
+        if (!empty) {
+            rows.addObject().put("trialId", "trial-001").put("outcome", "COMPLETED")
+                    .put("visitedRegionCount", 4).put("coveragePercent", 100).put("elapsedMs", 4000);
+            rows.addObject().put("trialId", "trial-002").put("outcome", "TIMED_OUT")
+                    .put("visitedRegionCount", 2).put("coveragePercent", 50).put("elapsedMs", 5000);
+            rows.addObject().put("trialId", "trial-003").put("outcome", "INTERRUPTED")
+                    .put("visitedRegionCount", 1).put("coveragePercent", 25).put("elapsedMs", 1500);
+        }
+        assertEquals(expected, report.path("systematicExploration"));
+        assertEquals(expected.path("therapySessionId"), report.path("execution").path("therapySessionId"));
+        assertEquals(expected.path("configurationId"), report.path("configuration").path("configurationId"));
+        assertEquals(1, report.path("configuration").path("configurationVersion").asLong());
+    }
+
+    @Test void standardScanningPreviewPreservesBothOriginsAndFractionalMetrics() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            standardScenario(origin, SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+            var report = standardPreview(origin);
+            assertStandardScanningSummary(report, origin, expectedStandardSummary(origin, SessionReportPeersTestResource.StandardScanningScenario.OBSERVED));
+            counts(1, 1, 1); standardReads(1);
+        }
+    }
+
+    @Test void standardScanningOmissionAndConfirmedZeroRemainDistinctFromBaselineAbsence() throws Exception {
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        var omitted = standardPreview(null);
+        assertFalse(omitted.has("standardScanning"), "Omitted selection must not imply zero trials");
+        counts(1, 1, 1); standardReads(0);
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.ZERO);
+        var zero = standardPreview("SYNTHETIC");
+        assertStandardScanningSummary(zero, "SYNTHETIC", expectedStandardSummary("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.ZERO));
+        assertTrue(zero.path("standardScanning").path("medianLocalizationDurationMs").isNull());
+        counts(1, 1, 1); standardReads(1);
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.ZERO);
+        var copy = createStandardCopy(PATIENT, STANDARD_SCANNING_SESSION, "http-standard-zero", "SYNTHETIC", expectedStandardSummary("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.ZERO));
+        counts(1, 1, 1); standardReads(1);
+        peers.scenario(PATIENT.value(), STANDARD_SCANNING_SESSION, accessToken, true, true);
+        standardScanningPdf(copy);
+        getCopy(PATIENT, STANDARD_SCANNING_SESSION, copy);
+        counts(0, 0, 0); standardReads(0);
+    }
+
+    @Test void standardScanningSavedCopyAndMatchingReplayStayFrozenAfterPeerChange() throws Exception {
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            String key = "http-standard-frozen-" + origin;
+            standardScenario(origin, SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+            var copy = createStandardCopy(PATIENT, STANDARD_SCANNING_SESSION, key, origin, expectedStandardSummary(origin, SessionReportPeersTestResource.StandardScanningScenario.OBSERVED));
+            counts(1, 1, 1); standardReads(1);
+            standardScenario(origin, SessionReportPeersTestResource.StandardScanningScenario.CHANGED);
+            standardScanningPdf(copy);
+            getCopy(PATIENT, STANDARD_SCANNING_SESSION, copy);
+            counts(0, 0, 0); standardReads(0);
+            var replay = postStandardSnapshot(accessToken, PATIENT, STANDARD_SCANNING_SESSION, key, origin);
+            assertUnchanged();
+            assertEquals(200, replay.statusCode()); assertEquals("no-store", replay.header("Cache-Control"));
+            assertTrue(replay.contentType().startsWith("application/json")); assertNull(replay.header("Location"));
+            assertTrue(copy.equals(mapper.readTree(replay.asString())), "Replay must preserve the exact selected saved copy");
+            counts(0, 0, 0); standardReads(0);
+            standardScenario(origin, SessionReportPeersTestResource.StandardScanningScenario.UNAVAILABLE);
+            standardScanningPdf(copy);
+            getCopy(PATIENT, STANDARD_SCANNING_SESSION, copy);
+            var unavailableReplay = postStandardSnapshot(accessToken, PATIENT, STANDARD_SCANNING_SESSION, key, origin);
+            assertUnchanged(); assertEquals(200, unavailableReplay.statusCode());
+            assertEquals("no-store", unavailableReplay.header("Cache-Control"));
+            assertTrue(copy.equals(mapper.readTree(unavailableReplay.asString())), "Unavailable peer must not refresh a saved copy");
+            counts(0, 0, 0); standardReads(0);
+        }
+    }
+
+    @Test void standardScanningSelectionConflictsPreserveCopiesAndNewKeysRemainIndependent() throws Exception {
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        var synthetic = createStandardCopy(PATIENT, STANDARD_SCANNING_SESSION, "http-standard-synthetic", "SYNTHETIC", expectedStandardSummary("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED));
+        counts(1, 1, 1); standardReads(1);
+        standardScenario("PRODUCER_REPORTED", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        for (String origin : Arrays.asList("PRODUCER_REPORTED", null)) {
+            snapshotError(postStandardSnapshot(accessToken, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-synthetic", origin), 409, "SELECTION_CONFLICT");
+            standardReads(0);
+        }
+        var producer = createStandardCopy(PATIENT, STANDARD_SCANNING_SESSION, "http-standard-producer", "PRODUCER_REPORTED", expectedStandardSummary("PRODUCER_REPORTED", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED));
+        counts(1, 1, 1); standardReads(1);
+        assertFalse(synthetic.path("reportSnapshotId").equals(producer.path("reportSnapshotId")), "A new key must create an independent copy");
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        snapshotError(postStandardSnapshot(accessToken, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-producer", "SYNTHETIC"), 409, "SELECTION_CONFLICT");
+        standardReads(0);
+        var omitted = createCopy(PATIENT, STANDARD_SCANNING_SESSION, "http-standard-omitted");
+        counts(1, 1, 1); standardReads(0);
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            snapshotError(postStandardSnapshot(accessToken, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-omitted", origin), 409, "SELECTION_CONFLICT");
+            standardReads(0);
+        }
+        getCopy(PATIENT, STANDARD_SCANNING_SESSION, synthetic);
+        getCopy(PATIENT, STANDARD_SCANNING_SESSION, producer);
+        getCopy(PATIENT, STANDARD_SCANNING_SESSION, omitted);
+        counts(0, 0, 0); standardReads(0);
+        visualScenario("SYNTHETIC", OBSERVED);
+        var historicalVisual = createCopy(PATIENT, VISUAL_SEARCH_SESSION, "http-standard-legacy-visual", "SYNTHETIC", expectedVisualSummary("SYNTHETIC", OBSERVED));
+        counts(1, 1, 1); visualReads(1);
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.CHANGED);
+        getCopy(PATIENT, VISUAL_SEARCH_SESSION, historicalVisual);
+        getCopy(PATIENT, STANDARD_SCANNING_SESSION, omitted);
+        counts(0, 0, 0); standardReads(0);
+    }
+
+    @Test void standardScanningInvalidOriginAndUnsupportedFixationAre400WithoutEnrichment() throws Exception {
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        for (String origin : List.of("", "synthetic", "UNKNOWN", " SYNTHETIC")) {
+            counts(0, 0, 0); standardReads(0);
+            resourceError(standardRequest(accessToken, PATIENT, STANDARD_SCANNING_SESSION, origin), 400, "SESSION_REPORT_INVALID_REQUEST");
+            assertUnchanged(); counts(0, 0, 0); standardReads(0);
+            counts(0, 0, 0); standardReads(0);
+            snapshotError(postStandardSnapshot(accessToken, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-invalid", origin), 400, "INVALID_REQUEST");
+            standardReads(0);
+        }
+        var bothPreview = given().baseUri("http://127.0.0.1").port(http.getPort()).redirects().follow(false)
+                .header("Authorization", "Bearer " + accessToken)
+                .queryParam("standardScanningDataOrigin", "SYNTHETIC").queryParam("visualSearchDataOrigin", "SYNTHETIC")
+                .get("/api/v1/clinical-patients/" + PATIENT.value() + "/therapy-sessions/" + STANDARD_SCANNING_SESSION + "/report-preview");
+        resourceError(bothPreview, 400, "SESSION_REPORT_INVALID_REQUEST"); assertUnchanged(); counts(0, 0, 0); standardReads(0);
+        var bothCopy = given().baseUri("http://127.0.0.1").port(http.getPort()).redirects().follow(false)
+                .header("Authorization", "Bearer " + accessToken).header("Idempotency-Key", "http-standard-both")
+                .queryParam("standardScanningDataOrigin", "SYNTHETIC").queryParam("visualSearchDataOrigin", "SYNTHETIC")
+                .post(snapshotPath(PATIENT, STANDARD_SCANNING_SESSION));
+        snapshotError(bothCopy, 400, "INVALID_REQUEST"); standardReads(0);
+        peers.scenario(PATIENT.value(), OWNED_SESSION, accessToken, false, false);
+        for (String origin : List.of("SYNTHETIC", "PRODUCER_REPORTED")) {
+            counts(0, 0, 0); standardReads(0);
+            resourceError(standardRequest(accessToken, PATIENT, OWNED_SESSION, origin), 400, "SESSION_REPORT_INVALID_REQUEST");
+            assertUnchanged(); counts(0, 0, 0); standardReads(0);
+            counts(0, 0, 0); standardReads(0);
+            snapshotError(postStandardSnapshot(accessToken, PATIENT, OWNED_SESSION, "http-standard-unsupported", origin), 400, "INVALID_REQUEST");
+            standardReads(0);
+        }
+    }
+
+    @Test void standardScanningSelectedRoutesRetainNativeAuthenticationAndPureDoctorGates() throws Exception {
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        frameworkUnauthenticated(standardRequest(null, PATIENT, STANDARD_SCANNING_SESSION, "SYNTHETIC")); assertUnchanged(); standardReads(0);
+        frameworkUnauthenticated(postStandardSnapshot(null, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-auth", "SYNTHETIC")); assertUnchanged(); standardReads(0);
+        // Existing tests retain the full malformed/tampered/expired token matrix; these pin the selected routes.
+        for (String role : List.of("PATIENT", "ADMIN")) {
+            String nonDoctor = token(List.of(role), Instant.now().plusSeconds(300));
+            frameworkForbidden(standardRequest(nonDoctor, PATIENT, STANDARD_SCANNING_SESSION, "SYNTHETIC")); assertUnchanged(); standardReads(0);
+            frameworkForbidden(postStandardSnapshot(nonDoctor, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-role", "SYNTHETIC")); assertUnchanged(); standardReads(0);
+            String mixed = token(List.of("DOCTOR", role), Instant.now().plusSeconds(300));
+            resourceError(standardRequest(mixed, PATIENT, STANDARD_SCANNING_SESSION, "SYNTHETIC"), 403, "SESSION_REPORT_FORBIDDEN");
+            assertUnchanged(); counts(0, 0, 0); standardReads(0);
+            snapshotError(postStandardSnapshot(mixed, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-mixed", "SYNTHETIC"), 403, "FORBIDDEN");
+            standardReads(0);
+        }
+    }
+
+    @Test void standardScanningSelectedRoutesDenyForeignAuthorAndRevokedAssignmentBeforePeers() throws Exception {
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        resourceError(standardRequest(accessToken, PATIENT, FOREIGN_STANDARD_SCANNING_SESSION, "SYNTHETIC"), 403, "SESSION_REPORT_FORBIDDEN");
+        assertUnchanged(); counts(0, 0, 0); standardReads(0);
+        snapshotError(postStandardSnapshot(accessToken, PATIENT, FOREIGN_STANDARD_SCANNING_SESSION, "http-standard-foreign", "SYNTHETIC"), 403, "FORBIDDEN");
+        standardReads(0);
+        revokeAssignment(STANDARD_SCANNING_REVOKED);
+        peers.scenario(STANDARD_SCANNING_REVOKED.value(), STANDARD_SCANNING_REVOKED_SESSION, accessToken, false, false);
+        peers.standardScanningScenario(new UUID(25, 12), "SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        resourceError(standardRequest(accessToken, STANDARD_SCANNING_REVOKED, STANDARD_SCANNING_REVOKED_SESSION, "SYNTHETIC"), 403, "SESSION_REPORT_FORBIDDEN");
+        assertUnchanged(); counts(0, 0, 0); standardReads(0);
+        snapshotError(postStandardSnapshot(accessToken, STANDARD_SCANNING_REVOKED, STANDARD_SCANNING_REVOKED_SESSION, "http-standard-revoked", "SYNTHETIC"), 403, "FORBIDDEN");
+        standardReads(0);
+    }
+
+    @Test void standardScanningUpstreamFailuresAndBindingMismatchesNeverPersistOrReplaceCopies() throws Exception {
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED);
+        var copy = createStandardCopy(PATIENT, STANDARD_SCANNING_SESSION, "http-standard-before-failures", "SYNTHETIC", expectedStandardSummary("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.OBSERVED));
+        counts(1, 1, 1); standardReads(1);
+        for (var failure : List.of(SessionReportPeersTestResource.StandardScanningScenario.UNAVAILABLE, SessionReportPeersTestResource.StandardScanningScenario.WRONG_SESSION, SessionReportPeersTestResource.StandardScanningScenario.WRONG_CONFIGURATION, SessionReportPeersTestResource.StandardScanningScenario.WRONG_VERSION, SessionReportPeersTestResource.StandardScanningScenario.WRONG_ORIGIN, SessionReportPeersTestResource.StandardScanningScenario.MALFORMED)) {
+            standardScenario("SYNTHETIC", failure);
+            resourceError(standardRequest(accessToken, PATIENT, STANDARD_SCANNING_SESSION, "SYNTHETIC"), 503, "SESSION_REPORT_UNAVAILABLE");
+            assertUnchanged(); counts(1, 1, 1); standardReads(1);
+            standardScenario("SYNTHETIC", failure);
+            resourceError(postStandardSnapshot(accessToken, PATIENT, STANDARD_SCANNING_SESSION, "http-standard-failure-" + failure.name(), "SYNTHETIC"),
+                    503, "SESSION_REPORT_SNAPSHOT_UNAVAILABLE");
+            assertUnchanged(); counts(1, 1, 1); standardReads(1);
+        }
+        standardScenario("SYNTHETIC", SessionReportPeersTestResource.StandardScanningScenario.UNAVAILABLE);
+        getCopy(PATIENT, STANDARD_SCANNING_SESSION, copy);
+        counts(0, 0, 0); standardReads(0);
+    }
+
+    private void standardScenario(String origin, SessionReportPeersTestResource.StandardScanningScenario scenario) {
+        peers.scenario(PATIENT.value(), STANDARD_SCANNING_SESSION, accessToken, false, false);
+        peers.standardScanningScenario(STANDARD_SCANNING_CONFIGURATION, origin, scenario);
+    }
+
+    private JsonNode standardPreview(String origin) throws Exception {
+        var response = standardRequest(accessToken, PATIENT, STANDARD_SCANNING_SESSION, origin);
+        assertUnchanged(); assertEquals(200, response.statusCode()); assertEquals("no-store", response.header("Cache-Control"));
+        assertTrue(response.contentType().startsWith("application/json"));
+        var report = mapper.readTree(response.asString());
+        var fields = new HashSet<String>(); report.fieldNames().forEachRemaining(fields::add);
+        var expected = new HashSet<>(Set.of("schemaVersion", "clinicalPatientId", "issuedAt", "mode", "analyticsNotice", "doctor",
+                "patient", "execution", "configuration", "sessionLimits", "technicalProgress", "analytics"));
+        if (origin != null) expected.add("standardScanning");
+        assertEquals(expected, fields);
+        assertEquals("STANDARD_SCANNING", report.path("mode").asText());
+        assertEquals(STANDARD_SCANNING_SESSION.toString(), report.path("execution").path("therapySessionId").asText());
+        assertEquals("COMPLETED", report.path("execution").path("status").asText());
+        assertEquals(STANDARD_SCANNING_CONFIGURATION.toString(), report.path("configuration").path("configurationId").asText());
+        assertEquals(1, report.path("configuration").path("configurationVersion").asLong());
+        assertEquals("CONFIRMED_NO_EVIDENCE", report.path("analytics").path("availability").asText());
+        assertTrue(report.path("analytics").path("streams").isArray() && report.path("analytics").path("streams").isEmpty());
+        assertEquals(NOTICE, report.path("analyticsNotice").asText());
+        assertFalse(response.asString().contains(accessToken), "Report must not contain a bearer token");
+        assertFalse(response.asString().contains(DOCTOR.value()), "Report must not contain a Cognito subject");
+        return report;
+    }
+
+    private JsonNode expectedStandardSummary(String origin, SessionReportPeersTestResource.StandardScanningScenario scenario) {
+        boolean zero = scenario == SessionReportPeersTestResource.StandardScanningScenario.ZERO, changed = scenario == SessionReportPeersTestResource.StandardScanningScenario.CHANGED;
+        var summary = mapper.createObjectNode().put("calculationVersion", "standard-scanning-trial-v1")
+                .put("therapySessionId", STANDARD_SCANNING_SESSION.toString()).put("configurationId", STANDARD_SCANNING_CONFIGURATION.toString())
+                .put("configurationVersion", 1).put("dataOrigin", origin).put("reportedTrialCount", zero ? 0 : changed ? 4 : 6)
+                .put("detectedTargetCount", zero ? 0 : changed ? 2 : 3).put("omissionCount", zero ? 0 : changed ? 1 : 2)
+                .put("interruptedCount", zero ? 0 : 1).put("eligibleLocalizationCount", zero ? 0 : changed ? 2 : 3);
+        if (zero) summary.putNull("medianLocalizationDurationMs"); else summary.put("medianLocalizationDurationMs", changed ? 2500.5 : 1250.5);
+        return summary;
+    }
+
+    private void assertStandardScanningSummary(JsonNode report, String origin, JsonNode expected) {
+        var summary = report.path("standardScanning");
+        var fields = new HashSet<String>(); summary.fieldNames().forEachRemaining(fields::add);
+        assertTrue(summary.isObject());
+        assertEquals(Set.of("calculationVersion", "therapySessionId", "configurationId", "configurationVersion", "dataOrigin",
+                "reportedTrialCount", "detectedTargetCount", "omissionCount", "interruptedCount", "eligibleLocalizationCount", "medianLocalizationDurationMs"), fields);
+        for (String field : List.of("configurationVersion", "reportedTrialCount", "detectedTargetCount", "omissionCount", "interruptedCount", "eligibleLocalizationCount"))
+            assertTrue(summary.path(field).isIntegralNumber(), "Standard Scanning counts and version must remain integral");
+        assertTrue(summary.path("medianLocalizationDurationMs").isNull() || summary.path("medianLocalizationDurationMs").isNumber());
+        assertTrue(expected != null && expected.equals(summary), "Standard Scanning summary must preserve the exact selected observations");
+        assertEquals(origin, summary.path("dataOrigin").asText());
+        assertTrue(report.path("execution").path("therapySessionId").equals(summary.path("therapySessionId")), "Standard Scanning session binding changed");
+        assertTrue(report.path("configuration").path("configurationId").equals(summary.path("configurationId")), "Standard Scanning configuration binding changed");
+        assertEquals(report.path("configuration").path("configurationVersion").asLong(), summary.path("configurationVersion").asLong());
+        assertEquals("STANDARD_SCANNING", report.path("mode").asText());
+    }
+
+    private void standardReads(int expected) {
+        assertEquals(expected, peers.standardScanningCount(), "Unexpected Standard Scanning peer read count");
+        assertEquals(0, peers.visualSearchCount(), "Standard Scanning must not query Visual Search");
+    }
+
+    private Response standardRequest(String token, ClinicalPatientId patient, UUID session, String origin) {
+        var request = given().baseUri("http://127.0.0.1").port(http.getPort()).redirects().follow(false);
+        if (token != null) request.header("Authorization", "Bearer " + token);
+        if (origin != null) request.queryParam("standardScanningDataOrigin", origin);
+        return request.get("/api/v1/clinical-patients/" + patient.value()
+                + "/therapy-sessions/" + session + "/report-preview");
+    }
+
+    private Response postStandardSnapshot(String token, ClinicalPatientId patient, UUID session, String key, String origin) {
+        var request = given().baseUri("http://127.0.0.1").port(http.getPort()).redirects().follow(false);
+        if (token != null) request.header("Authorization", "Bearer " + token);
+        if (origin != null) request.queryParam("standardScanningDataOrigin", origin);
+        return request.header("Idempotency-Key", key).post(snapshotPath(patient, session));
+    }
+
+    private JsonNode createStandardCopy(ClinicalPatientId patient, UUID session, String key, String origin, JsonNode expectedSummary) throws Exception {
+        return createCopy(patient, session, key, origin, expectedSummary, true);
     }
 
     @Test void visualSearchPreviewPreservesBothOriginsAndFractionalMetrics() throws Exception {
@@ -807,6 +1573,46 @@ class DoctorSessionReportHttpIT {
 
     private void visualReads(int expected) { assertEquals(expected, peers.visualSearchCount(), "Unexpected Visual Search peer read count"); }
 
+    private void standardScanningPdf(JsonNode copy) throws Exception {
+        String id = copy.path("reportSnapshotId").asText();
+        var selected = copy.path("report").path("standardScanning");
+        assertTrue(selected.isObject(), "The expected saved copy must contain its selected summary");
+        var response = getPdf(accessToken, PATIENT, STANDARD_SCANNING_SESSION, id);
+        assertUnchanged();
+        assertEquals(200, response.statusCode()); assertEquals("application/pdf", response.contentType());
+        assertEquals("no-store", response.header("Cache-Control"));
+        assertTrue(("attachment; filename=\"session-report-" + id + ".pdf\"").equals(response.header("Content-Disposition")),
+                "PDF filename must contain only the saved copy reference");
+        byte[] bytes = response.asByteArray();
+        assertTrue(bytes.length > 5 && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F' && bytes[4] == '-',
+                "Successful download must contain a PDF document");
+        try (var pdf = Loader.loadPDF(bytes)) {
+            assertTrue(pdf.getNumberOfPages() > 0, "PDF requires readable pages");
+            String text = new PDFTextStripper().getText(pdf).replaceAll("\\s", "");
+            assertTrue(text.contains(id) && text.contains(copy.path("createdAt").asText()), "PDF must retain the saved copy reference and creation time");
+            assertTrue(text.contains("StandardScanning-reportedfinalresults"), "PDF must display the selected saved-results table");
+            assertTrue(text.contains("notadiagnosis"), "PDF requires the non-diagnostic notice");
+            assertTrue(text.contains(NOTICE.replaceAll("\\s", "")), "Baseline evidence absence remains independent of Standard Scanning results");
+            assertTrue(text.contains("Dataorigin" + selected.path("dataOrigin").asText() + "Calculationversion"), "PDF origin must match the frozen summary row");
+            assertTrue(text.contains("Calculationversion" + selected.path("calculationVersion").asText() + "Reportedattempts"), "PDF calculation provenance must match the frozen summary row");
+            String[][] rows = {{"Reportedattempts", "reportedTrialCount", "Detectedtargets"}, {"Detectedtargets", "detectedTargetCount", "Omissions"},
+                    {"Omissions", "omissionCount", "Interruptions"}, {"Interruptions", "interruptedCount", "Eligiblelocalizations"},
+                    {"Eligiblelocalizations", "eligibleLocalizationCount", "Medianlocalizationduration(ms)"}};
+            for (var row : rows)
+                assertTrue(text.contains(row[0] + selected.path(row[1]).asText() + row[2]), "PDF metric row must match the exact frozen value");
+            var savedMedian = selected.path("medianLocalizationDurationMs");
+            String median = savedMedian.isNull() ? "Notavailable" : savedMedian.decimalValue().toPlainString();
+            assertTrue(text.contains("Medianlocalizationduration(ms)" + median + "Meaning"), "PDF median must match the frozen numeric-or-unavailable row");
+            assertFalse(text.contains("Medianlocalizationduration(ms)2500.5Meaning"), "PDF must not refresh the changed peer median");
+            assertFalse(text.contains("StandardScanningresultsnotincluded"), "A selected zero summary must not become omitted results");
+            String warning = selected.path("dataOrigin").asText().equals("SYNTHETIC")
+                    ? "SYNTHETIC:testdata,notpatientevidence."
+                    : "PRODUCER_REPORTED:producer-reportedoutcomes;notalgorithmicallyverifiedclinicalsuccess.";
+            assertTrue(text.contains(warning), "PDF requires the explicit saved-origin limitation");
+        }
+        counts(0, 0, 0); standardReads(0);
+    }
+
     private void visualSearchPdf(JsonNode copy) throws Exception {
         String id = copy.path("reportSnapshotId").asText();
         var selected = copy.path("report").path("visualSearch");
@@ -936,8 +1742,28 @@ class DoctorSessionReportHttpIT {
     }
 
     private JsonNode createCopy(ClinicalPatientId patient, UUID session, String key, String origin, JsonNode expectedSummary) throws Exception {
+        return createCopy(patient, session, key, origin, expectedSummary, false);
+    }
+
+    private JsonNode createCopy(ClinicalPatientId patient, UUID session, String key, String origin, JsonNode expectedSummary,
+            boolean standardScanning) throws Exception {
         assertUnchanged();
-        var response = postSnapshot(accessToken, patient, session, key, origin);
+        var response = standardScanning ? postStandardSnapshot(accessToken, patient, session, key, origin)
+                : postSnapshot(accessToken, patient, session, key, origin);
+        return assertCreatedCopy(response, patient, session, key, report -> {
+            if (standardScanning) {
+                assertFalse(report.has("visualSearch"), "Standard Scanning must not add Visual Search results");
+                assertStandardScanningSummary(report, origin, expectedSummary);
+            } else {
+                if (origin == null) assertFalse(report.has("visualSearch"), "Omitted selection must not create a Visual Search section");
+                else assertVisualSearchSummary(report, origin, expectedSummary);
+                assertFalse(report.has("standardScanning"), "Existing copy creation must not acquire Standard Scanning results");
+            }
+        });
+    }
+
+    private JsonNode assertCreatedCopy(Response response, ClinicalPatientId patient, UUID session, String key,
+            java.util.function.Consumer<JsonNode> assertSection) throws Exception {
         assertEquals(201, response.statusCode());
         assertEquals("no-store", response.header("Cache-Control"));
         assertTrue(response.contentType().startsWith("application/json"));
@@ -973,8 +1799,7 @@ class DoctorSessionReportHttpIT {
                 && NOTICE.equals(report.path("analyticsNotice").asText()), "Unexpected synthetic report content");
         assertFalse(response.asString().contains(accessToken), "Snapshot must not contain a bearer token");
         assertFalse(response.asString().contains(DOCTOR.value()), "Snapshot must not contain a Cognito subject");
-        if (origin == null) assertFalse(report.has("visualSearch"), "Omitted selection must not create a Visual Search section");
-        else assertVisualSearchSummary(report, origin, expectedSummary);
+        assertSection.accept(report);
         var after = snapshot();
         assertTrue(before.keySet().equals(after.keySet()), "Snapshot creation changed the application table set");
         for (String table : before.keySet()) {

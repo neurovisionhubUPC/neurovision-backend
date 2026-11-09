@@ -198,7 +198,7 @@ class DoctorSessionReportSnapshotControllerTest {
         var context = type.getDeclaredField("uriInfo");
         assertEquals(jakarta.ws.rs.core.UriInfo.class, context.getType());
         assertNotNull(context.getAnnotation(jakarta.ws.rs.core.Context.class));
-        var create = type.getMethod("create", String.class, String.class, String.class, String.class, String.class);
+        var create = type.getMethod("create", String.class, String.class, String.class, String.class, String.class, String.class, String.class, String.class, String.class);
         var get = type.getMethod("get", String.class, String.class, String.class);
         assertEquals("visualSearchDataOrigin",create.getParameters()[3].getAnnotation(jakarta.ws.rs.QueryParam.class).value());
         assertNotNull(create.getAnnotation(jakarta.ws.rs.POST.class)); assertNotNull(get.getAnnotation(jakarta.ws.rs.GET.class));
@@ -206,5 +206,127 @@ class DoctorSessionReportSnapshotControllerTest {
         assertEquals("reportSnapshotId", get.getParameters()[2].getAnnotation(jakarta.ws.rs.PathParam.class).value());
         for (var method : List.of(create, get)) assertArrayEquals(new String[]{"DOCTOR"}, method.getAnnotation(jakarta.annotation.security.RolesAllowed.class).value());
         assertEquals("Idempotency-Key", create.getParameters()[2].getAnnotation(jakarta.ws.rs.HeaderParam.class).value());
+    }
+    @Test void scanningCopyAndReplayPreserveMetricsAndHistoricalCopiesWithoutPeers() {
+        f.standardScanning=true; f.echoScanningOrigin=true;
+        var created = doctor().create(PATIENT.toString(),SESSION.toString(),"scanning-key",null,"SYNTHETIC",null);
+        assertEquals(201,created.getStatus()); var saved=json(created);
+        assertEquals("SYNTHETIC",saved.path("report").path("standardScanning").path("dataOrigin").asText());
+        var id=UUID.fromString(saved.path("reportSnapshotId").asText()); int peers=f.peers; f.failPeer="names";
+        var replay=doctor().create(PATIENT.toString(),SESSION.toString(),"scanning-key",null,"SYNTHETIC",null);
+        assertEquals(200,replay.getStatus()); assertEquals(saved,json(replay)); assertEquals(saved,json(get(doctor(),id)));
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"scanning-key",null,"PRODUCER_REPORTED",null),409,"SELECTION_CONFLICT");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"scanning-key",null,null,null),409,"SELECTION_CONFLICT");
+        assertEquals(peers,f.peers); assertEquals(1,f.writes);
+    }
+    @Test void scanningAbsentBlankAndBothSelectionsKeepRequestAndAuthorizationRules() throws Exception {
+        for (String origin:List.of("", "synthetic", "ALL", "SYNTHETIC "))
+            error(doctor().create(PATIENT.toString(),SESSION.toString(),"key",null,origin,null),400,"INVALID_REQUEST");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC","SYNTHETIC",null),400,"INVALID_REQUEST");
+        var c=doctor(); var query=new jakarta.ws.rs.core.MultivaluedHashMap<String,String>(); query.putSingle("standardScanningDataOrigin", "");
+        var uri=Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args)->{assertEquals("getQueryParameters",m.getName());return query;});
+        var field=DoctorSessionReportSnapshotController.class.getDeclaredField("uriInfo");field.setAccessible(true);field.set(c,uri);
+        error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,null),400,"INVALID_REQUEST");
+        assertEquals(0,f.reads); assertEquals(0,f.peers); assertEquals(0,f.writes);
+        error(controller(null).create(PATIENT.toString(),SESSION.toString(),"key",null,"",null),401,"UNAUTHENTICATED");
+    }
+    @Test void scanningLargeMedianRetainsPrecisionWithoutRewritingOldCopy() {
+        f.standardScanning=true; var median=new java.math.BigDecimal("9223372036854775806.5");
+        f.scanningSummary=new com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Summary(
+                "standard-scanning-trial-v1",SESSION,new UUID(0,4),1,
+                com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Origin.SYNTHETIC,1,1,0,0,1,median);
+        var created=doctor().create(PATIENT.toString(),SESSION.toString(),"key",null,"SYNTHETIC",null);
+        assertEquals(201,created.getStatus()); var saved=json(created);
+        assertEquals(median,saved.path("report").path("standardScanning").path("medianLocalizationDurationMs").decimalValue());
+        var id=UUID.fromString(saved.path("reportSnapshotId").asText());
+        assertEquals(median,json(get(doctor(),id)).path("report").path("standardScanning").path("medianLocalizationDurationMs").decimalValue());
+    }
+
+    @Test void fixationCopyAndReplayPreserveMetricsAndHistoricalCopiesWithoutPeers() {
+        f.echoFixationOrigin=true;
+        var created = doctor().create(PATIENT.toString(),SESSION.toString(),"fixation-key",null,null,"SYNTHETIC",null);
+        assertEquals(201,created.getStatus()); var saved=json(created);
+        assertEquals("SYNTHETIC",saved.path("report").path("sustainedFixation").path("dataOrigin").asText());
+        var id=UUID.fromString(saved.path("reportSnapshotId").asText()); int peers=f.peers; f.failPeer="names";
+        var replay=doctor().create(PATIENT.toString(),SESSION.toString(),"fixation-key",null,null,"SYNTHETIC",null);
+        assertEquals(200,replay.getStatus()); assertEquals(saved,json(replay)); assertEquals(saved,json(get(doctor(),id)));
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"fixation-key",null,null,"PRODUCER_REPORTED",null),409,"SELECTION_CONFLICT");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"fixation-key",null,null,null,null),409,"SELECTION_CONFLICT");
+        assertEquals(peers,f.peers); assertEquals(1,f.writes);
+    }
+    @Test void fixationAbsentBlankAndBothSelectionsKeepRequestAndAuthorizationRules() throws Exception {
+        for (String origin:List.of("", "synthetic", "ALL", "SYNTHETIC "))
+            error(doctor().create(PATIENT.toString(),SESSION.toString(),"key",null,null,origin,null),400,"INVALID_REQUEST");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null,"SYNTHETIC",null),400,"INVALID_REQUEST");
+        var c=doctor(); var query=new jakarta.ws.rs.core.MultivaluedHashMap<String,String>(); query.putSingle("sustainedFixationDataOrigin", "");
+        var uri=Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args)->{assertEquals("getQueryParameters",m.getName());return query;});
+        var field=DoctorSessionReportSnapshotController.class.getDeclaredField("uriInfo");field.setAccessible(true);field.set(c,uri);
+        error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,null),400,"INVALID_REQUEST");
+        assertEquals(0,f.reads); assertEquals(0,f.peers); assertEquals(0,f.writes);
+        error(controller(null).create(PATIENT.toString(),SESSION.toString(),"key",null,null,"",null),401,"UNAUTHENTICATED");
+        query.putSingle("sustainedFixationDataOrigin","SYNTHETIC");
+        query.add("sustainedFixationDataOrigin","");
+        error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,"SYNTHETIC",null),400,"INVALID_REQUEST");
+    }
+    @Test void saccadeCopyAndReplayPreserveMetricsAndHistoricalCopiesWithoutPeers() {
+        f.saccade = true; f.echoSaccadeOrigin=true;
+        var created = doctor().create(PATIENT.toString(),SESSION.toString(),"saccade-key",null,null,null,"SYNTHETIC",null);
+        assertEquals(201,created.getStatus()); var saved=json(created);
+        assertEquals("SYNTHETIC",saved.path("report").path("compensatorySaccade").path("dataOrigin").asText());
+        var id=UUID.fromString(saved.path("reportSnapshotId").asText()); int peers=f.peers; f.failPeer="names";
+        var replay=doctor().create(PATIENT.toString(),SESSION.toString(),"saccade-key",null,null,null,"SYNTHETIC",null);
+        assertEquals(200,replay.getStatus()); assertEquals(saved,json(replay)); assertEquals(saved,json(get(doctor(),id)));
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"saccade-key",null,null,null,"PRODUCER_REPORTED",null),409,"SELECTION_CONFLICT");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"saccade-key",null,null,null,null,null),409,"SELECTION_CONFLICT");
+        assertEquals(peers,f.peers); assertEquals(1,f.writes);
+    }
+    @Test void saccadeAbsentBlankAndBothSelectionsKeepRequestAndAuthorizationRules() throws Exception {
+        for (String origin:List.of("", "synthetic", "ALL", "SYNTHETIC "))
+            error(doctor().create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,origin,null),400,"INVALID_REQUEST");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null,null,"SYNTHETIC",null),400,"INVALID_REQUEST");
+        var c=doctor(); var query=new jakarta.ws.rs.core.MultivaluedHashMap<String,String>(); query.putSingle("compensatorySaccadeDataOrigin", "");
+        var uri=Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args)->{assertEquals("getQueryParameters",m.getName());return query;});
+        var field=DoctorSessionReportSnapshotController.class.getDeclaredField("uriInfo");field.setAccessible(true);field.set(c,uri);
+        error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,null,null),400,"INVALID_REQUEST");
+        assertEquals(0,f.reads); assertEquals(0,f.peers); assertEquals(0,f.writes);
+        error(controller(null).create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,"",null),401,"UNAUTHENTICATED");
+        query.putSingle("compensatorySaccadeDataOrigin","SYNTHETIC");
+        query.add("compensatorySaccadeDataOrigin","");
+        error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,"SYNTHETIC",null),400,"INVALID_REQUEST");
+    }
+    @Test void explorationCopyAndReplayPreserveMetricsAndHistoricalCopiesWithoutPeers() {
+        f.exploration = true; f.echoExplorationOrigin=true;
+        var created = doctor().create(PATIENT.toString(),SESSION.toString(),"exploration-key",null,null,null,null,"SYNTHETIC",null);
+        assertEquals(201,created.getStatus()); var saved=json(created);
+        assertEquals("SYNTHETIC",saved.path("report").path("systematicExploration").path("dataOrigin").asText());
+        var id=UUID.fromString(saved.path("reportSnapshotId").asText()); int peers=f.peers; f.failPeer="names";
+        var replay=doctor().create(PATIENT.toString(),SESSION.toString(),"exploration-key",null,null,null,null,"SYNTHETIC",null);
+        assertEquals(200,replay.getStatus()); assertEquals(saved,json(replay)); assertEquals(saved,json(get(doctor(),id)));
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"exploration-key",null,null,null,null,"PRODUCER_REPORTED",null),409,"SELECTION_CONFLICT");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"exploration-key",null,null,null,null,null,null),409,"SELECTION_CONFLICT");
+        assertEquals(peers,f.peers); assertEquals(1,f.writes);
+    }
+    @Test void explorationAbsentBlankAndBothSelectionsKeepRequestAndAuthorizationRules() throws Exception {
+        for (String origin:List.of("", "synthetic", "ALL", "SYNTHETIC "))
+            error(doctor().create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,null,origin,null),400,"INVALID_REQUEST");
+        error(doctor().create(PATIENT.toString(),SESSION.toString(),"key","SYNTHETIC",null,null,null,"SYNTHETIC",null),400,"INVALID_REQUEST");
+        var c=doctor(); var query=new jakarta.ws.rs.core.MultivaluedHashMap<String,String>(); query.putSingle("systematicExplorationDataOrigin", "");
+        var uri=Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{jakarta.ws.rs.core.UriInfo.class},
+                (proxy,m,args)->{assertEquals("getQueryParameters",m.getName());return query;});
+        var field=DoctorSessionReportSnapshotController.class.getDeclaredField("uriInfo");field.setAccessible(true);field.set(c,uri);
+        error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,null,null,null),400,"INVALID_REQUEST");
+        assertEquals(0,f.reads); assertEquals(0,f.peers); assertEquals(0,f.writes);
+        error(controller(null).create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,null,"",null),401,"UNAUTHENTICATED");
+        query.putSingle("systematicExplorationDataOrigin","SYNTHETIC");
+        query.add("systematicExplorationDataOrigin","");
+        error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,null,"SYNTHETIC",null),400,"INVALID_REQUEST");
+        for (var values:List.of(List.of("SYNTHETIC","SYNTHETIC"),List.of("","SYNTHETIC"),List.of("",""))) {
+            query.put("systematicExplorationDataOrigin",values);
+            error(c.create(PATIENT.toString(),SESSION.toString(),"key",null,null,null,null,values.getFirst(),null),400,"INVALID_REQUEST");
+        }
+        assertEquals(0,f.reads); assertEquals(0,f.peers); assertEquals(0,f.writes);
     }
 }

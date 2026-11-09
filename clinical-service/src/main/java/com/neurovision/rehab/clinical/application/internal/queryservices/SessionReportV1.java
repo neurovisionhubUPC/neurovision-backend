@@ -7,6 +7,10 @@ import com.neurovision.rehab.clinical.application.ports.out.integration.SessionR
 import com.neurovision.rehab.clinical.application.ports.out.persistence.DoctorTherapySessionReadRepository.*;
 import com.neurovision.rehab.clinical.domain.model.valueobjects.*;
 import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportVisualSearchPort.Summary;
+import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSustainedFixationPort;
+import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportCompensatorySaccadePort;
+import com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportSystematicExplorationPort;
+import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
 
@@ -16,7 +20,40 @@ import java.util.*;
  */
 public record SessionReportV1(UUID clinicalPatientId, Identity doctor, Name patient,
         Execution execution, FrozenConfiguration configuration, SessionLimits sessionLimits,
-        TechnicalProgress technicalProgress, Observation analytics, Instant issuedAt, Summary visualSearch) {
+        TechnicalProgress technicalProgress, Observation analytics, Instant issuedAt, Summary visualSearch,
+        com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Summary standardScanning,
+        SessionReportSustainedFixationPort.Summary sustainedFixation,
+        SessionReportCompensatorySaccadePort.Summary compensatorySaccade,
+        SessionReportSystematicExplorationPort.Summary systematicExploration) {
+    public SessionReportV1(UUID clinicalPatientId, Identity doctor, Name patient, Execution execution,
+            FrozenConfiguration configuration, SessionLimits sessionLimits, TechnicalProgress technicalProgress,
+            Observation analytics, Instant issuedAt, Summary visualSearch,
+            com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Summary standardScanning,
+            SessionReportSustainedFixationPort.Summary sustainedFixation,
+            SessionReportCompensatorySaccadePort.Summary compensatorySaccade) {
+        this(clinicalPatientId,doctor,patient,execution,configuration,sessionLimits,technicalProgress,analytics,issuedAt,
+                visualSearch,standardScanning,sustainedFixation,compensatorySaccade,null);
+    }
+    public SessionReportV1(UUID clinicalPatientId, Identity doctor, Name patient, Execution execution,
+            FrozenConfiguration configuration, SessionLimits sessionLimits, TechnicalProgress technicalProgress,
+            Observation analytics, Instant issuedAt, Summary visualSearch,
+            com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Summary standardScanning,
+            SessionReportSustainedFixationPort.Summary sustainedFixation) {
+        this(clinicalPatientId,doctor,patient,execution,configuration,sessionLimits,technicalProgress,analytics,issuedAt,
+                visualSearch,standardScanning,sustainedFixation,null);
+    }
+    public SessionReportV1(UUID clinicalPatientId, Identity doctor, Name patient, Execution execution,
+            FrozenConfiguration configuration, SessionLimits sessionLimits, TechnicalProgress technicalProgress,
+            Observation analytics, Instant issuedAt, Summary visualSearch,
+            com.neurovision.rehab.clinical.application.ports.out.integration.SessionReportStandardScanningPort.Summary standardScanning) {
+        this(clinicalPatientId,doctor,patient,execution,configuration,sessionLimits,technicalProgress,analytics,issuedAt,
+                visualSearch,standardScanning,null);
+    }
+    public SessionReportV1(UUID clinicalPatientId, Identity doctor, Name patient, Execution execution,
+            FrozenConfiguration configuration, SessionLimits sessionLimits, TechnicalProgress technicalProgress,
+            Observation analytics, Instant issuedAt, Summary visualSearch) {
+        this(clinicalPatientId,doctor,patient,execution,configuration,sessionLimits,technicalProgress,analytics,issuedAt,visualSearch,null);
+    }
     /** Existing callers retain the exact omitted-selection behavior. */
     public SessionReportV1(UUID clinicalPatientId, Identity doctor, Name patient, Execution execution,
             FrozenConfiguration configuration, SessionLimits sessionLimits, TechnicalProgress technicalProgress,
@@ -34,6 +71,41 @@ public record SessionReportV1(UUID clinicalPatientId, Identity doctor, Name pati
                     && configuration.configurationId().equals(visualSearch.configurationId())
                     && configuration.configurationVersion() == visualSearch.configurationVersion());
         }
+        require(visualSearch == null || standardScanning == null);
+        if (standardScanning != null) {
+            require(supportsStandardScanning(configuration.parameters())
+                    && execution.therapySessionId().equals(standardScanning.therapySessionId())
+                    && configuration.configurationId().equals(standardScanning.configurationId())
+                    && configuration.configurationVersion() == standardScanning.configurationVersion());
+        }
+        if (sustainedFixation != null) {
+            var fixation = sustainedFixationParameters(configuration.parameters());
+            require(visualSearch == null && standardScanning == null && fixation != null
+                    && execution.therapySessionId().equals(sustainedFixation.therapySessionId())
+                    && configuration.configurationId().equals(sustainedFixation.configurationId())
+                    && configuration.configurationVersion() == sustainedFixation.configurationVersion()
+                    && sustainedFixation.totalInsideTargetMs() >= sustainedFixation.completedTargetCount() * fixation.minimumFixationMs()
+                    && sustainedFixation.totalInsideTargetMs() <= sustainedFixation.reportedTrialCount() * fixation.maximumFixationMs());
+        }
+        if (compensatorySaccade != null) {
+            var policy = compensatorySaccadeParameters(configuration.parameters());
+            var median = compensatorySaccade.medianTimeToTargetMs();
+            require(visualSearch == null && standardScanning == null && sustainedFixation == null && policy != null
+                    && execution.therapySessionId().equals(compensatorySaccade.therapySessionId())
+                    && configuration.configurationId().equals(compensatorySaccade.configurationId())
+                    && configuration.configurationVersion() == compensatorySaccade.configurationVersion()
+                    && (median == null || (median.compareTo(BigDecimal.valueOf(policy.minimumFixationMs())) >= 0
+                    && median.compareTo(BigDecimal.valueOf(policy.maximumStimulusDurationMs())) <= 0)));
+        }
+        if (systematicExploration != null) {
+            var policy = systematicExplorationParameters(configuration.parameters());
+            require(visualSearch == null && standardScanning == null && sustainedFixation == null && compensatorySaccade == null
+                    && policy != null && execution.therapySessionId().equals(systematicExploration.therapySessionId())
+                    && configuration.configurationId().equals(systematicExploration.configurationId())
+                    && configuration.configurationVersion() == systematicExploration.configurationVersion());
+            for (var row : systematicExploration.traversals())
+                row.validateWindow(policy.minimumFixationMs(),policy.maximumStimulusDurationMs());
+        }
         // Reuse the existing frozen-configuration/progress consistency rule, including legacy null semantics.
         new Detail(clinicalPatientId,new Session(execution.therapySessionId(),execution.therapyPlanId(),
                 configuration.parameters().exercise().code().value(),execution.status(),execution.startedAt(),execution.endedAt(),
@@ -45,6 +117,26 @@ public record SessionReportV1(UUID clinicalPatientId, Identity doctor, Name pati
         if (parameters instanceof TherapeuticExerciseParameters.Prescribed p) parameters = p.parameters();
         return parameters instanceof TherapeuticExerciseParameters.VisualSearch search
                 && "TARGET_SEARCH_WITH_DISTRACTORS".equals(search.mode().name());
+    }
+    static boolean supportsStandardScanning(TherapeuticExerciseParameters parameters) {
+        if (parameters instanceof TherapeuticExerciseParameters.Prescribed p) parameters = p.parameters();
+        return parameters instanceof TherapeuticExerciseParameters.VisualScanning scanning
+                && "STANDARD_SCANNING".equals(scanning.mode().name());
+    }
+    static TherapeuticExerciseParameters.Fixation sustainedFixationParameters(TherapeuticExerciseParameters parameters) {
+        if (parameters instanceof TherapeuticExerciseParameters.Prescribed p) parameters = p.parameters();
+        return parameters instanceof TherapeuticExerciseParameters.Fixation fixation
+                && fixation.mode() == TherapeuticExerciseParameters.FixationMode.SUSTAINED_TARGET_FIXATION ? fixation : null;
+    }
+    static TherapeuticExerciseParameters.VisualScanning compensatorySaccadeParameters(TherapeuticExerciseParameters parameters) {
+        if (parameters instanceof TherapeuticExerciseParameters.Prescribed p) parameters = p.parameters();
+        return parameters instanceof TherapeuticExerciseParameters.VisualScanning scanning
+                && scanning.mode() == TherapeuticExerciseParameters.VisualScanningMode.COMPENSATORY_SACCADE ? scanning : null;
+    }
+    static TherapeuticExerciseParameters.VisualScanning systematicExplorationParameters(TherapeuticExerciseParameters parameters) {
+        if (parameters instanceof TherapeuticExerciseParameters.Prescribed p) parameters = p.parameters();
+        return parameters instanceof TherapeuticExerciseParameters.VisualScanning scanning
+                && scanning.mode() == TherapeuticExerciseParameters.VisualScanningMode.SYSTEMATIC_EXPLORATION ? scanning : null;
     }
     public String mode() {
         var parameters = configuration.parameters();

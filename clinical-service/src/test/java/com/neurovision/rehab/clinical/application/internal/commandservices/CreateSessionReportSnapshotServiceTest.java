@@ -26,7 +26,18 @@ public class CreateSessionReportSnapshotServiceTest {
         public int reads, writes, peers;
         public CyclicBarrier firstRequests;
         public String firstName = "Synthetic";
-        public boolean visualSearch, echoVisualOrigin;
+        public boolean visualSearch, echoVisualOrigin, standardScanning, echoScanningOrigin;
+        public volatile SessionReportStandardScanningPort.Summary scanningSummary;
+        public int scanningCalls;
+        public volatile SessionReportSustainedFixationPort.Summary fixationSummary;
+        public boolean echoFixationOrigin;
+        public int fixationCalls;
+        public boolean exploration, echoExplorationOrigin;
+        public int explorationCalls;
+        public volatile SessionReportSystematicExplorationPort.Summary explorationSummary;
+        public boolean saccade, echoSaccadeOrigin;
+        public int saccadeCalls;
+        public volatile SessionReportCompensatorySaccadePort.Summary saccadeSummary;
         public volatile SessionReportVisualSearchPort.Summary visualSummary;
         public int visualCalls;
         public final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
@@ -61,7 +72,9 @@ public class CreateSessionReportSnapshotServiceTest {
                 public DoctorTherapySessionReadRepository.Observation observe(UUID p, String d, Filters f, int o, int l) { throw new AssertionError(); }
                 public Optional<Detail> observeDetail(UUID p, String d, UUID s) {
                     if (compositionDenied) return Optional.empty();
-                    var parameters = visualSearch ? TherapeuticConfigurationTestData.visualSearchSnapshot().parameters()
+                    var parameters = exploration ? com.neurovision.rehab.clinical.application.internal.queryservices.ComposeSystematicExplorationReportServiceTest.systematicExplorationParameters()
+                            : saccade ? com.neurovision.rehab.clinical.application.internal.queryservices.ComposeCompensatorySaccadeReportServiceTest.compensatorySaccadeParameters()
+                            : standardScanning ? com.neurovision.rehab.clinical.application.internal.queryservices.ComposeStandardScanningReportServiceTest.standardScanningParameters() : visualSearch ? TherapeuticConfigurationTestData.visualSearchSnapshot().parameters()
                             : TherapeuticConfigurationTestData.fixationSnapshot().parameters();
                     return Optional.of(new Detail(p, new Session(s, new UUID(0, 3), parameters.exercise().code().value(), "COMPLETED",
                             TIME.minusSeconds(180), TIME.minusSeconds(60), 120, LocalDate.of(2026, 10, 1), new UUID(0, 4), 1, 1),
@@ -80,7 +93,20 @@ public class CreateSessionReportSnapshotServiceTest {
                             DoctorReportIdentityPort.Availability.AVAILABLE, "Synthetic", "Doctor", null, null); },
                     (s, t) -> { peer("analytics"); return new SessionReportAnalyticsPort.ConfirmedNoEvidence(s); }, (s, o, t) -> { peer("visual"); visualCalls++; assertEquals(TOKEN,t);
                         if (echoVisualOrigin) return new SessionReportVisualSearchPort.Summary("visual-search-trial-v1",s,new UUID(0,4),1,o,1,1,0,0,1,java.math.BigDecimal.TEN);
-                        return visualSummary; }, Clock.fixed(TIME, ZoneOffset.UTC));
+                        return visualSummary; }, (s,o,t) -> { peer("scanning"); scanningCalls++; assertEquals(TOKEN,t);
+                        if (echoScanningOrigin) return new SessionReportStandardScanningPort.Summary("standard-scanning-trial-v1",s,new UUID(0,4),1,o,1,1,0,0,1,java.math.BigDecimal.TEN);
+                        return scanningSummary; }, (s,o,t) -> { peer("fixation"); fixationCalls++; assertEquals(TOKEN,t);
+                        if (echoFixationOrigin) return new SessionReportSustainedFixationPort.Summary("sustained-fixation-trial-v1",s,new UUID(0,4),1,o,1,1000,1);
+                        return fixationSummary; }, (s,o,t) -> {
+                        peer("saccade"); saccadeCalls++; assertEquals(TOKEN,t);
+                        if (echoSaccadeOrigin) return new SessionReportCompensatorySaccadePort.Summary(
+                                "compensatory-saccade-trial-v1",s,new UUID(0,4),1,o,1,1,java.math.BigDecimal.valueOf(1000));
+                        return saccadeSummary; }, (s,o,t) -> {
+                        peer("exploration"); explorationCalls++; assertEquals(TOKEN,t);
+                        if (echoExplorationOrigin) return new SessionReportSystematicExplorationPort.Summary(
+                                "systematic-exploration-trial-v1",s,new UUID(0,4),1,o,1,List.of(
+                                new SessionReportSystematicExplorationPort.Traversal("trial-1",SessionReportSystematicExplorationPort.Outcome.COMPLETED,4,100,4000)));
+                        return explorationSummary; }, Clock.fixed(TIME, ZoneOffset.UTC));
         }
         public CreateSessionReportSnapshotService service() {
             var codec = new com.neurovision.rehab.clinical.infrastructure.integration.JsonSessionReportSnapshotEncoder(mapper);
@@ -90,6 +116,10 @@ public class CreateSessionReportSnapshotServiceTest {
                     return codec.encode(report);
                 }
                 public SessionReportVisualSearchPort.Origin visualSearchSelection(String json, UUID session) { return codec.visualSearchSelection(json,session); }
+                public SessionReportStandardScanningPort.Origin standardScanningSelection(String json, UUID session) { return codec.standardScanningSelection(json,session); }
+                public SessionReportSustainedFixationPort.Origin sustainedFixationSelection(String json, UUID session) { return codec.sustainedFixationSelection(json,session); }
+                public SessionReportSystematicExplorationPort.Origin systematicExplorationSelection(String json, UUID session) { return codec.systematicExplorationSelection(json,session); }
+                public SessionReportCompensatorySaccadePort.Origin compensatorySaccadeSelection(String json, UUID session) { return codec.compensatorySaccadeSelection(json,session); }
             });
         }
         public WriteResult create(String key) { return service().create(DOCTOR, TOKEN, PATIENT, SESSION, key); }

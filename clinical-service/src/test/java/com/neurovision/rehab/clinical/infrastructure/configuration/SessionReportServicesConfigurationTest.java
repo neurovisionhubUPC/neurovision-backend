@@ -22,15 +22,18 @@ class SessionReportServicesConfigurationTest {
         assertInstanceOf(ProfileDoctorReportIdentityAdapter.class, configuration.doctorReportIdentity("http://localhost:8082", 4000, mapper));
         assertInstanceOf(AnalyticsSessionReportAdapter.class, configuration.sessionReportAnalytics("http://localhost:8085", 4000, mapper));
         assertInstanceOf(AnalyticsVisualSearchReportAdapter.class,configuration.sessionReportVisualSearch("http://localhost:8085",4000,mapper));
+        assertInstanceOf(AnalyticsStandardScanningReportAdapter.class,configuration.sessionReportStandardScanning("http://localhost:8085",4000,mapper));
         for (String base : List.of("file:///tmp/report", "http://user@localhost", "http://localhost/path", "http://localhost?query=x", "http://localhost#fragment")) {
             assertThrows(IllegalArgumentException.class, () -> configuration.doctorReportIdentity(base, 4000, mapper));
             assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportAnalytics(base, 4000, mapper));
             assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportVisualSearch(base,4000,mapper));
+            assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportStandardScanning(base,4000,mapper));
         }
         for (long timeout : List.of(99L, 10001L)) {
             assertThrows(IllegalArgumentException.class, () -> configuration.doctorReportIdentity("http://localhost:8082", timeout, mapper));
             assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportAnalytics("http://localhost:8085", timeout, mapper));
             assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportVisualSearch("http://localhost:8085",timeout,mapper));
+            assertThrows(IllegalArgumentException.class, () -> configuration.sessionReportStandardScanning("http://localhost:8085",timeout,mapper));
         }
     }
 
@@ -56,16 +59,31 @@ class SessionReportServicesConfigurationTest {
         assertNotNull(SessionReportServicesConfiguration.class.getAnnotation(ApplicationScoped.class));
         for (var method : SessionReportServicesConfiguration.class.getDeclaredMethods()) {
             if (method.isSynthetic()) continue;
+            if (method.getReturnType() == ComposeSessionReportService.class && method.getParameterCount() == 6) {
+                assertNull(method.getAnnotation(Produces.class));
+                assertNull(method.getAnnotation(ApplicationScoped.class));
+                assertArrayEquals(new Class<?>[]{DoctorTherapySessionQueryService.class, AssignedPatientQueryService.class,
+                        AssignedPatientNamesPort.class, DoctorReportIdentityPort.class, SessionReportAnalyticsPort.class,
+                        SessionReportVisualSearchPort.class}, method.getParameterTypes());
+                continue;
+            }
             assertNotNull(method.getAnnotation(Produces.class)); assertNotNull(method.getAnnotation(ApplicationScoped.class));
             if (method.getReturnType() == ComposeSessionReportService.class) {
                 assertArrayEquals(new Class<?>[]{DoctorTherapySessionQueryService.class, AssignedPatientQueryService.class,
-                        AssignedPatientNamesPort.class, DoctorReportIdentityPort.class, SessionReportAnalyticsPort.class, SessionReportVisualSearchPort.class}, method.getParameterTypes());
-            } else if (method.getReturnType() == DoctorReportIdentityPort.class || method.getReturnType() == SessionReportAnalyticsPort.class || method.getReturnType() == SessionReportVisualSearchPort.class) {
+                        AssignedPatientNamesPort.class, DoctorReportIdentityPort.class, SessionReportAnalyticsPort.class, SessionReportVisualSearchPort.class, SessionReportStandardScanningPort.class,
+                        SessionReportSustainedFixationPort.class, SessionReportCompensatorySaccadePort.class, SessionReportSystematicExplorationPort.class}, method.getParameterTypes());
+            } else if (method.getReturnType() == DoctorReportIdentityPort.class || method.getReturnType() == SessionReportAnalyticsPort.class || method.getReturnType() == SessionReportVisualSearchPort.class || method.getReturnType() == SessionReportStandardScanningPort.class
+                    || method.getReturnType() == SessionReportSustainedFixationPort.class
+                    || method.getReturnType() == SessionReportCompensatorySaccadePort.class
+                    || method.getReturnType() == SessionReportSystematicExplorationPort.class) {
                 String prefix = method.getReturnType() == DoctorReportIdentityPort.class ? "clinical.profile" : "clinical.analytics";
                 assertEquals(prefix + ".base-url", method.getParameters()[0].getAnnotation(ConfigProperty.class).name());
                 assertEquals(prefix + ".timeout-ms", method.getParameters()[1].getAnnotation(ConfigProperty.class).name());
             }
         }
+        assertEquals(1, Arrays.stream(SessionReportServicesConfiguration.class.getDeclaredMethods())
+                .filter(method -> method.getReturnType() == ComposeSessionReportService.class
+                        && method.isAnnotationPresent(Produces.class)).count());
         var properties = new Properties();
         try (var input = getClass().getResourceAsStream("/application.properties")) { properties.load(input); }
         assertEquals("${PROFILE_BASE_URL:http://localhost:8082}", properties.getProperty("clinical.profile.base-url"));

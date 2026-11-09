@@ -58,6 +58,41 @@ public final class SessionReportRestAssembler {
                     .put("omissionCount",selected.omissionCount()).put("interruptedCount",selected.interruptedCount())
                     .put("eligibleSearchCount",selected.eligibleSearchCount()).put("medianSearchDurationMs",selected.medianSearchDurationMs());
         }
+        if (report.standardScanning() != null) {
+            var selected = report.standardScanning();
+            root.putObject("standardScanning").put("calculationVersion",selected.calculationVersion())
+                    .put("therapySessionId",selected.therapySessionId().toString()).put("configurationId",selected.configurationId().toString())
+                    .put("configurationVersion",selected.configurationVersion()).put("dataOrigin",selected.dataOrigin().name())
+                    .put("reportedTrialCount",selected.reportedTrialCount()).put("detectedTargetCount",selected.detectedTargetCount())
+                    .put("omissionCount",selected.omissionCount()).put("interruptedCount",selected.interruptedCount())
+                    .put("eligibleLocalizationCount",selected.eligibleLocalizationCount()).put("medianLocalizationDurationMs",selected.medianLocalizationDurationMs());
+        }
+        if (report.sustainedFixation() != null) {
+            var selected = report.sustainedFixation();
+            root.putObject("sustainedFixation").put("calculationVersion",selected.calculationVersion())
+                    .put("therapySessionId",selected.therapySessionId().toString()).put("configurationId",selected.configurationId().toString())
+                    .put("configurationVersion",selected.configurationVersion()).put("dataOrigin",selected.dataOrigin().name())
+                    .put("reportedTrialCount",selected.reportedTrialCount()).put("totalInsideTargetMs",selected.totalInsideTargetMs())
+                    .put("completedTargetCount",selected.completedTargetCount());
+        }
+        if (report.compensatorySaccade() != null) {
+            var selected = report.compensatorySaccade();
+            root.putObject("compensatorySaccade").put("calculationVersion",selected.calculationVersion())
+                    .put("therapySessionId",selected.therapySessionId().toString()).put("configurationId",selected.configurationId().toString())
+                    .put("configurationVersion",selected.configurationVersion()).put("dataOrigin",selected.dataOrigin().name())
+                    .put("reportedTrialCount",selected.reportedTrialCount()).put("reachedTargetCount",selected.reachedTargetCount())
+                    .put("medianTimeToTargetMs",selected.medianTimeToTargetMs());
+        }
+        if (report.systematicExploration() != null) {
+            var selected = report.systematicExploration();
+            var section = root.putObject("systematicExploration").put("calculationVersion",selected.calculationVersion())
+                    .put("therapySessionId",selected.therapySessionId().toString()).put("configurationId",selected.configurationId().toString())
+                    .put("configurationVersion",selected.configurationVersion()).put("dataOrigin",selected.dataOrigin().name())
+                    .put("reportedTrialCount",selected.reportedTrialCount());
+            var rows = section.putArray("traversals");
+            for (var row : selected.traversals()) rows.addObject().put("trialId",row.trialId()).put("outcome",row.outcome().name())
+                    .put("visitedRegionCount",row.visitedRegionCount()).put("coveragePercent",row.coveragePercent()).put("elapsedMs",row.elapsedMs());
+        }
         return new SessionReportResponse(root);
     }
 

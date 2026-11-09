@@ -41,11 +41,12 @@ public class PatientTherapyController {
 
     @GET
     @RolesAllowed("PATIENT")
-    @Operation(summary = "List the patient's current assigned therapy plans")
+    @Operation(summary = "List current assigned plans with informational daily availability")
     @APIResponses({
         @APIResponse(responseCode = "200", description = "Current assigned plans; admission is checked at start"),
         @APIResponse(responseCode = "401", description = "Missing or invalid access token"),
-        @APIResponse(responseCode = "403", description = "Patient identity is not permitted")
+        @APIResponse(responseCode = "403", description = "Patient identity is not permitted"),
+        @APIResponse(responseCode = "503", description = "Daily availability could not be read safely")
     })
     public List<PatientTherapyPlanResponse> list() {
         var subject = patientSubject();
@@ -54,6 +55,9 @@ public class PatientTherapyController {
                     .map(view -> PatientTherapyRestAssembler.toResponse(view, mapper)).toList();
         } catch (SecurityException denied) {
             throw denied();
+        } catch (RuntimeException unavailable) {
+            throw new WebApplicationException(Response.status(503).type(MediaType.APPLICATION_JSON)
+                    .entity(java.util.Map.of("code", "PATIENT_THERAPY_AVAILABILITY_UNAVAILABLE")).build());
         }
     }
 
