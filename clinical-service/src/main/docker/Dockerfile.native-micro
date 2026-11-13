@@ -13,6 +13,7 @@ RUN chown 1001 /work \
     && chown 1001:root /work
 
 COPY --chown=1001:root --chmod=0755 target/*-runner /work/application
+COPY --chown=1001:root src/main/resources/fonts/SourceSans3-OFL.md /usr/share/licenses/SourceSans3-OFL.md
 
 EXPOSE 8080
 USER 1001

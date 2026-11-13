@@ -55,7 +55,7 @@ public final class PdfBoxSessionReportRenderer implements SessionReportPdfRender
             if (systematicExploration != null)
                 snapshotCodec.systematicExplorationSelection(snapshot.reportJson(), snapshot.therapySessionId());
             try (var document = new PDDocument();
-                    var input = Objects.requireNonNull(getClass().getResourceAsStream("/fonts/DejaVuSans.ttf"));
+                    var input = Objects.requireNonNull(getClass().getResourceAsStream("/fonts/SourceSans3-Regular.ttf"));
                     var fontBytes = new RandomAccessReadBuffer(input);
                     var trueType = new TTFParser().parse(fontBytes);
                     var bytes = new ByteArrayOutputStream()) {

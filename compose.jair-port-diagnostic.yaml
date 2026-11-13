@@ -1,0 +1,4 @@
+services:
+  oidc-fixture:
+    ports:
+      - "127.0.0.1:18081:8080"

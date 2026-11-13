@@ -1,0 +1,13 @@
+services:
+  clinical-service:
+    image: neurovision/clinical-service:native-pdf-reviewed-31f2b388
+    build: !reset null
+    pull_policy: never
+    environment:
+      ANALYTICS_BASE_URL: http://analytics-service:8080
+  analytics-service:
+    image: neurovision/analytics-service:native-mvp-streams-de3f5a21
+    build: !reset null
+    pull_policy: never
+    environment:
+      CLINICAL_INTERNAL_BASE_URL: http://clinical-service:8080
