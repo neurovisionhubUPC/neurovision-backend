@@ -1,0 +1,49 @@
+x-jvm-service: &jvm-service
+  entrypoint: [java]
+  command:
+    - -Dquarkus.http.host=0.0.0.0
+    - -Djava.util.logging.manager=org.jboss.logmanager.LogManager
+    - -jar
+    - /deployments/quarkus-run.jar
+
+services:
+  iam-service:
+    <<: *jvm-service
+    image: neurovision/iam-service:${NEUROVISION_JVM_IMAGE_TAG:-compose-jvm}
+    build: !override
+      context: ./iam-service
+      dockerfile: src/main/docker/Dockerfile.jvm
+
+  profile-service:
+    <<: *jvm-service
+    image: neurovision/profile-service:${NEUROVISION_JVM_IMAGE_TAG:-compose-jvm}
+    build: !override
+      context: ./profile-service
+      dockerfile: src/main/docker/Dockerfile.jvm
+
+  clinical-service:
+    <<: *jvm-service
+    image: neurovision/clinical-service:${NEUROVISION_JVM_IMAGE_TAG:-compose-jvm}
+    build: !override
+      context: ./clinical-service
+      dockerfile: src/main/docker/Dockerfile.jvm
+    environment:
+      ANALYTICS_BASE_URL: http://analytics-service:8080
+
+  telemetry-service:
+    <<: *jvm-service
+    image: neurovision/telemetry-service:${NEUROVISION_JVM_IMAGE_TAG:-compose-jvm}
+    build: !override
+      context: ./telemetry-service
+      dockerfile: src/main/docker/Dockerfile.jvm
+
+  analytics-service:
+    <<: *jvm-service
+    image: neurovision/analytics-service:${NEUROVISION_JVM_IMAGE_TAG:-compose-jvm}
+    build: !override
+      context: ./analytics-service
+      dockerfile: src/main/docker/Dockerfile.jvm
+
+networks:
+  neurovision:
+    name: ${COMPOSE_PROJECT_NAME}-jvm

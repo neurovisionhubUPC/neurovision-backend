@@ -1,0 +1,35 @@
+FROM quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-25 AS build
+ARG SERVICE
+USER 0
+WORKDIR /workspace
+RUN chown 1001:0 /workspace
+COPY --chown=1001:0 . .
+USER 1001
+RUN --mount=type=cache,target=/var/tmp/neurovision-maven,uid=1001,gid=0,sharing=locked \
+    set -eu; \
+    case "${SERVICE}" in iam-service|profile-service|clinical-service|telemetry-service|analytics-service) ;; *) exit 1 ;; esac; \
+    tr -d '\r' < mvnw > /tmp/neurovision-mvnw; \
+    cp /tmp/neurovision-mvnw ./mvnw; \
+    MAVEN_USER_HOME=/var/tmp/neurovision-maven bash ./mvnw -B -ntp \
+        -Dmaven.repo.local=/var/tmp/neurovision-maven/repository \
+        -Pcompose -f "${SERVICE}/pom.xml" -Dnative -DskipTests \
+        -Dquarkus.native.container-build=false -Dquarkus.container-image.build=false \
+        -Dquarkus.native.native-image-xmx=5g package; \
+    set -- "${SERVICE}"/target/*-runner; \
+    test "$#" -eq 1 && test -f "$1"; \
+    mkdir -p /tmp/neurovision-output/licenses; \
+    cp "$1" /tmp/neurovision-output/application; \
+    if [ "${SERVICE}" = clinical-service ]; then \
+        cp clinical-service/src/main/resources/fonts/SourceSans3-OFL.md /tmp/neurovision-output/licenses/; \
+    fi
+
+FROM quay.io/quarkus/ubi9-quarkus-micro-image:2.0
+USER 0
+WORKDIR /work/
+RUN chown 1001:root /work && chmod "g+rwX" /work
+COPY --from=build --chown=1001:root --chmod=0755 /tmp/neurovision-output/application /work/application
+# Copy the OFL notice into the Clinical image only; other modules have no extra files.
+COPY --from=build --chown=1001:root /tmp/neurovision-output/licenses/ /usr/share/licenses/
+EXPOSE 8080
+USER 1001
+ENTRYPOINT ["./application", "-Dquarkus.http.host=0.0.0.0"]
