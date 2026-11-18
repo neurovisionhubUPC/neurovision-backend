@@ -131,6 +131,18 @@ The activity, progress, and completion endpoints apply to sessions started with 
 
 Completion is local to Clinical. It does not prove gaze quality, full Telemetry persistence, or report readiness. Telemetry ingestion and Analytics results are separate contracts.
 
+### Saving progress and recovering after an interruption
+
+Clinical does not wait for the end of the exercise to save progress. Each accepted activity event saves the session accounting, progress state, and event acknowledgement in one transaction. Count a repetition only after its matching `REPETITION_FINISHED` is accepted. Data that exists only in browser memory is not guaranteed to survive a refresh or disconnect.
+
+The session starts with a **120-second lease**. Each newly accepted activity event renews the lease from server receipt time by 120 seconds (without moving an existing later expiry backwards). An identical event replay does not renew it. Reading `/current`, detail, or `/progress` also does not renew it. A pause is not an indefinite reservation: without further accepted activity, the session expires.
+
+To recover, read `/current` and, for a live schema-2 session, `/progress`. Reuse the returned frozen parameters, credited counters, and `nextSequence`; do not send `ACTIVITY_STARTED` again for an already started activity. Use `RESUMED` when paused or when a gap requires resumption. If the observation is `EXPIRED`, do not send new activity to that session; the normal start flow must recheck admission and handle the expired session. Expiry does not erase previously saved counters, but those counters are not transferred to a new session.
+
+**Interrupted repetition:** already accepted completed repetitions remain credited. A pause, a gap greater than 15 seconds, or resumption discards the open repetition without counting it as completed. Start its replacement with a new `repetitionId` and index `completedRepetitions + 1`. Recovery is not a saved-game checkpoint: these endpoints do not expose an unfinished repetition's ID or persist the exact screen, target layout, or browser game state. For example, after 3 accepted completions out of 5, those 3 remain stored; a partially performed fourth repetition is not a fourth completion.
+
+Telemetry batches and terminal attempt results are separate saves: a Telemetry 202 confirms broker acceptance, while Analytics receives a result when an attempt ends. Neither is an automatic checkpoint for an unfinished game. See [Telemetry](../telemetry/integration.md) and [Analytics](../analytics/integration.md).
+
 ### Patient-specific errors
 
 Handle status first: 400 for malformed inputs where validated; 401 for authentication; 403 for role or access denial; 409 for start admission, event ordering, lease, unsupported legacy progress, target, or idempotency conflicts; 503 for unavailable reads or operations where mapped. The controller-mapped error codes are in `PatientTherapyApiErrorResponse`; do not assume start or framework rejections have that JSON shape. Never render a failed read as an empty plan list or `NONE`.
