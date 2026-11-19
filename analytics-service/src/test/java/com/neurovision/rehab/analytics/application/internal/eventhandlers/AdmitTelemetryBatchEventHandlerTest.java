@@ -1,19 +1,26 @@
 package com.neurovision.rehab.analytics.application.internal.eventhandlers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.neurovision.rehab.analytics.application.internal.eventhandlers.AdmitTelemetryBatchEventHandler.Status;
 import com.neurovision.rehab.analytics.application.ports.out.persistence.TelemetryInboxPort;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.AcceptedTelemetryBatch;
 import com.neurovision.rehab.analytics.domain.model.valueobjects.TelemetryAdmissionQuality;
 import com.neurovision.rehab.analytics.infrastructure.observability.MicrometerAnalyticsAdmissionMetricsAdapter;
+import com.neurovision.rehab.analytics.interfaces.events.transform.TelemetryBatchAcceptedV1Decoder;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.smallrye.mutiny.Uni;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +34,41 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class AdmitTelemetryBatchEventHandlerTest {
+    @Test
+    void characterizesSentAtOnlyReplayAsBatchConflictWithoutReplacingTheOriginal() throws Exception {
+        var mapper = new ObjectMapper().registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        final ObjectNode original;
+        try (var input = getClass().getResourceAsStream("/fixtures/telemetry/v1/accepted-event-wire.json")) {
+            original = (ObjectNode) mapper.readTree(java.util.Objects.requireNonNull(input));
+        }
+        var replay = original.deepCopy();
+        replay.put("sentAt", Instant.parse(original.path("sentAt").asText()).plusMillis(250).toString());
+        var restored = replay.deepCopy();
+        restored.set("sentAt", original.get("sentAt"));
+        assertEquals(original, restored, "The probe must change only sentAt");
+
+        var key = original.path("therapySessionId").asText() + ":" + original.path("streamId").asText();
+        var now = Instant.parse("2026-09-17T10:00:05Z");
+        var first = TelemetryBatchAcceptedV1Decoder.decode(key, mapper.writeValueAsString(original),
+                mapper, 65536, 100, Duration.ofSeconds(60), now);
+        var unchanged = TelemetryBatchAcceptedV1Decoder.decode(key, mapper.writeValueAsString(original),
+                mapper, 65536, 100, Duration.ofSeconds(60), now);
+        var changed = TelemetryBatchAcceptedV1Decoder.decode(key, mapper.writeValueAsString(replay),
+                mapper, 65536, 100, Duration.ofSeconds(60), now);
+        assertEquals(first.payloadSha256(), unchanged.payloadSha256());
+        assertNotEquals(first.payloadSha256(), changed.payloadSha256());
+
+        var store = new MemoryInbox();
+        var handler = new AdmitTelemetryBatchEventHandler(store, outcome -> {});
+        assertEquals(Status.ADMITTED, admit(handler, first).status());
+        assertEquals(Status.DUPLICATE, admit(handler, unchanged).status());
+        // Characterization of the current policy, not approval of cross-consumer equivalence.
+        assertEquals(Status.BATCH_CONFLICT, admit(handler, changed).status());
+        assertEquals(1, store.rows.size());
+        assertSame(first, store.rows.getFirst());
+    }
+
     @Test
     void observesOnlyTheFailingAdmissionOperationWithoutReplacingItsFailure() {
         var names = java.util.Map.of("prepare", "INBOX_PREPARE", "findByBatchId", "INBOX_FIND_BATCH",

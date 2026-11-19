@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.neurovision.rehab.telemetry.interfaces.events.contracts.TelemetryBatchAcceptedV1;
 import java.time.Duration;
@@ -19,6 +20,29 @@ class TelemetryBatchPersistenceEventAssemblerTest {
     private final UUID batchId = UUID.randomUUID();
     private final UUID sessionId = UUID.randomUUID();
     private final UUID streamId = UUID.randomUUID();
+
+    @Test
+    void characterizesSentAtOnlyReplayAsTheSamePersistenceIdentity() throws Exception {
+        final ObjectNode original;
+        try (var input = getClass().getResourceAsStream("/fixtures/telemetry/v1/accepted-event-wire.json")) {
+            original = (ObjectNode) mapper.readTree(java.util.Objects.requireNonNull(input));
+        }
+        var replay = original.deepCopy();
+        replay.put("sentAt", Instant.parse(original.path("sentAt").asText()).plusMillis(250).toString());
+        var restored = replay.deepCopy();
+        restored.set("sentAt", original.get("sentAt"));
+        assertEquals(original, restored, "The probe must change only sentAt");
+
+        var key = original.path("therapySessionId").asText() + ":" + original.path("streamId").asText();
+        var first = TelemetryBatchPersistenceEventAssembler.decode(key, mapper.writeValueAsString(original),
+                mapper, 65536, 100, Duration.ofSeconds(60), now);
+        var retry = TelemetryBatchPersistenceEventAssembler.decode(key, mapper.writeValueAsString(replay),
+                mapper, 65536, 100, Duration.ofSeconds(60), now);
+
+        assertNotEquals(first.batch().sentAt(), retry.batch().sentAt());
+        // Characterization only: this does not exercise PostgreSQL or change the retry contract.
+        assertEquals(first.payloadSha256(), retry.payloadSha256());
+    }
 
     @Test
     void normalizesBothSampleKindsAndDeduplicatesPublicationAttempts() throws Exception {

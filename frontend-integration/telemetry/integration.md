@@ -18,6 +18,8 @@ Use `Authorization: Bearer <access-token>` on both routes and `Content-Type: app
 - Send both sample arrays; use `[]` for the unused kind, but not for both. The combined sample limit is deployment-configured. Coordinates, confidence, and gameplay progress are finite values in [0, 1]; score is a nonnegative integer, and speed is finite and nonnegative. Do not add extra JSON fields.
 - **202 `BROKER_ACCEPTED` means Kafka acknowledged publication.** It does not confirm TimescaleDB persistence, Analytics projection, or session completion. Do not turn a 429 or an uncertain 503 into a successful upload, or assume the endpoint is an HTTP idempotency API.
 
+For retry compatibility, preserve the complete queued batch, including its original `sentAt`; do not rebuild its timestamps or samples on another attempt. Follow the [small offline queue check](retry-queue-check.md) before changing the frontend or backend.
+
 ### Read historical samples
 
 Provide a known `streamId` UUID and `from` / `to` ISO instants (prefer UTC with `Z`). The filter is on `sampleTime`: `from` inclusive, `to` exclusive, with `from < to` and a window of at most 15 minutes. `limit` is 1–200, default 100. This is a single-stream read, not a stream discovery endpoint.
