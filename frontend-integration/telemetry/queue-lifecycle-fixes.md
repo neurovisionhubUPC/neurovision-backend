@@ -97,3 +97,5 @@ Use the actual queue and lifecycle path with controlled HTTP promises, not a rep
 - [ ] Different-session initialization does not send old entries under the new session; preserve existing freshness/held-observation protections.
 
 Return the new frontend commit, changed file/functions, exact existing test command, observed results and remaining policy decisions. Do not include tokens, real identifiers, coordinates, raw request bodies or HAR exports. Backend contract execution and authenticated persistence tests require separate authorization; do not repeat prior demos to close these client corrections.
+
+For the later LIFE-POST-GATE continuation race identified at frontend `80342a7`, follow the [session closure lifecycle check](../clinical/session-closure-lifecycle-check.md). Queue ownership alone does not guard Clinical callbacks after the delivery gate.
