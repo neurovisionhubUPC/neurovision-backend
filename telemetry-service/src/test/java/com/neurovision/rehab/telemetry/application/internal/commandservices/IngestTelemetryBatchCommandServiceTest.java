@@ -3,16 +3,26 @@ package com.neurovision.rehab.telemetry.application.internal.commandservices;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.neurovision.rehab.telemetry.application.internal.validation.TelemetryValidationPolicy;
 import com.neurovision.rehab.telemetry.application.ports.out.authorization.TherapySessionAuthorizationPort;
 import com.neurovision.rehab.telemetry.application.ports.out.messaging.TelemetryPublicationPort;
 import com.neurovision.rehab.telemetry.domain.model.valueobjects.TelemetryBatch;
+import com.neurovision.rehab.telemetry.interfaces.rest.resource.TelemetryBatchController;
+import io.quarkus.oidc.AccessTokenCredential;
+import io.quarkus.security.identity.SecurityIdentity;
+import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -120,6 +130,71 @@ class IngestTelemetryBatchCommandServiceTest {
                 publicationFailure.ingest(batch, TOKEN, null).status());
     }
 
+    @Test
+    void directControllerAcceptsIdenticalRetriesOnlyAfterEachSimulatedBrokerAcknowledgement() throws Exception {
+        var auth = new FakeAuthorization(TherapySessionAuthorizationPort.Decision.PERMITTED);
+        var publisher = new FakePublisher(true);
+        var mapper = wireMapper();
+        var controller = controller(service(auth, publisher), mapper);
+        String body = mapper.writeValueAsString(batch);
+        // Direct invocation checks response mapping, not HTTP routing, OIDC or durable delivery.
+        try (var first = controller.ingest(body); var retry = controller.ingest(body)) {
+            assertEquals(202, first.getStatus()); assertEquals(Map.of("code", "BROKER_ACCEPTED"), first.getEntity());
+            assertEquals(202, retry.getStatus()); assertEquals(first.getEntity(), retry.getEntity());
+        }
+        assertEquals(2, auth.calls); assertEquals(2, publisher.calls); assertEquals(2, publisher.attempts.size());
+        assertNotEquals(publisher.attempts.get(0).correlationId(), publisher.attempts.get(1).correlationId());
+        for (var attempt : publisher.attempts) {
+            var published = attempt.validation().batch();
+            assertEquals(batch, published);
+            assertEquals(batch.batchId(), published.batchId()); assertEquals(batch.sequence(), published.sequence());
+            assertEquals(batch.capturedAt(), published.capturedAt()); assertEquals(batch.sentAt(), published.sentAt());
+            assertEquals(mapper.readTree(body), mapper.readTree(mapper.writeValueAsString(published)));
+            assertFalse(attempt.toString().contains(TOKEN));
+        }
+    }
+
+    @Test
+    void directControllerNeverReturnsAcceptedWithoutAcknowledgementOrAuthorization() throws Exception {
+        var mapper = wireMapper(); String body = mapper.writeValueAsString(batch);
+        for (boolean throwsFailure : List.of(false, true)) {
+            var auth = new FakeAuthorization(TherapySessionAuthorizationPort.Decision.PERMITTED);
+            int[] publicationCalls = {0};
+            var ingestion = new IngestTelemetryBatchCommandService(auth, publication -> {
+                publicationCalls[0]++;
+                if (throwsFailure) throw new IllegalStateException("simulated publication failure");
+                return false;
+            }, new TelemetryValidationPolicy(2, Duration.ZERO), 2, 10, Clock.fixed(NOW, ZoneOffset.UTC));
+            try (var response = controller(ingestion, mapper).ingest(body)) {
+                assertEquals(503, response.getStatus());
+                assertEquals(Map.of("code", "TELEMETRY_INGESTION_UNAVAILABLE"), response.getEntity());
+            }
+            assertEquals(1, auth.calls); assertEquals(1, publicationCalls[0]);
+        }
+        var denied = new FakeAuthorization(TherapySessionAuthorizationPort.Decision.DENIED);
+        var publisher = new FakePublisher(true);
+        try (var response = controller(service(denied, publisher), mapper).ingest(body)) {
+            assertEquals(403, response.getStatus());
+            assertEquals(Map.of("code", "TELEMETRY_INGESTION_FORBIDDEN"), response.getEntity());
+        }
+        assertEquals(1, denied.calls); assertEquals(0, publisher.calls);
+    }
+
+    private static ObjectMapper wireMapper() {
+        return new ObjectMapper().registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    }
+
+    private static TelemetryBatchController controller(IngestTelemetryBatchCommandService ingestion, ObjectMapper mapper) {
+        var identity = (SecurityIdentity) Proxy.newProxyInstance(SecurityIdentity.class.getClassLoader(),
+                new Class<?>[]{SecurityIdentity.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("getCredential") && args[0] == AccessTokenCredential.class)
+                        return new AccessTokenCredential(TOKEN);
+                    throw new AssertionError("Unexpected identity operation " + method.getName());
+                });
+        return new TelemetryBatchController(ingestion, identity, mapper);
+    }
+
     private IngestTelemetryBatchCommandService service(FakeAuthorization auth, FakePublisher publisher) {
         return new IngestTelemetryBatchCommandService(auth, publisher,
                 new TelemetryValidationPolicy(2, Duration.ZERO), 2, 10,
@@ -147,6 +222,7 @@ class IngestTelemetryBatchCommandServiceTest {
         private final boolean acknowledged;
         private int calls;
         private TelemetryPublicationPort.Publication accepted;
+        private final List<TelemetryPublicationPort.Publication> attempts = new ArrayList<>();
 
         private FakePublisher(boolean acknowledged) { this.acknowledged = acknowledged; }
 
@@ -154,6 +230,7 @@ class IngestTelemetryBatchCommandServiceTest {
         public boolean publish(TelemetryPublicationPort.Publication accepted) {
             calls++;
             this.accepted = accepted;
+            attempts.add(accepted);
             return acknowledged;
         }
     }

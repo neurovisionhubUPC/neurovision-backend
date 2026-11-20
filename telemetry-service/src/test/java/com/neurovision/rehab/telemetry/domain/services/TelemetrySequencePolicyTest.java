@@ -9,10 +9,17 @@ import org.junit.jupiter.api.Test;
 class TelemetrySequencePolicyTest {
     @Test
     void classifiesFirstContiguousGapAndLateArrivals() {
+        var zero = TelemetrySequencePolicy.assess(-1, 0);
+        assertEquals(TelemetrySequencePolicy.Quality.INITIAL, zero.quality());
+        assertNull(zero.missingStart()); assertNull(zero.missingEnd());
         assertEquals(TelemetrySequencePolicy.Quality.INITIAL,
                 TelemetrySequencePolicy.assess(-1, 8).quality());
         assertEquals(TelemetrySequencePolicy.Quality.IN_ORDER,
                 TelemetrySequencePolicy.assess(8, 9).quality());
+        assertNull(TelemetrySequencePolicy.assess(-1, 8).missingStart());
+        assertNull(TelemetrySequencePolicy.assess(-1, 8).missingEnd());
+        assertNull(TelemetrySequencePolicy.assess(8, 9).missingStart());
+        assertNull(TelemetrySequencePolicy.assess(8, 9).missingEnd());
         var gap = TelemetrySequencePolicy.assess(9, 12);
         assertEquals(TelemetrySequencePolicy.Quality.GAP_DETECTED, gap.quality());
         assertEquals(10L, gap.missingStart());

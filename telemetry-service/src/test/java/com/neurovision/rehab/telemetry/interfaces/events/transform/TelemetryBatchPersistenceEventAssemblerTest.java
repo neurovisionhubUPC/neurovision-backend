@@ -36,12 +36,33 @@ class TelemetryBatchPersistenceEventAssemblerTest {
         var key = original.path("therapySessionId").asText() + ":" + original.path("streamId").asText();
         var first = TelemetryBatchPersistenceEventAssembler.decode(key, mapper.writeValueAsString(original),
                 mapper, 65536, 100, Duration.ofSeconds(60), now);
+        var unchanged = TelemetryBatchPersistenceEventAssembler.decode(key, mapper.writeValueAsString(original),
+                mapper, 65536, 100, Duration.ofSeconds(60), now);
         var retry = TelemetryBatchPersistenceEventAssembler.decode(key, mapper.writeValueAsString(replay),
                 mapper, 65536, 100, Duration.ofSeconds(60), now);
 
         assertNotEquals(first.batch().sentAt(), retry.batch().sentAt());
+        assertEquals(first.batch(), unchanged.batch()); assertEquals(first.payloadSha256(), unchanged.payloadSha256());
+        assertEquals(first.batch().batchId(), retry.batch().batchId());
+        assertEquals(first.batch().sequence(), retry.batch().sequence());
+        assertEquals(first.batch().capturedAt(), retry.batch().capturedAt());
+        assertEquals(first.batch().gazeSamples(), retry.batch().gazeSamples());
+        assertEquals(first.batch().gameplaySamples(), retry.batch().gameplaySamples());
         // Characterization only: this does not exercise PostgreSQL or change the retry contract.
         assertEquals(first.payloadSha256(), retry.payloadSha256());
+    }
+
+    @Test
+    void persistenceFingerprintDistinguishesChangedBatchIdAndSequenceWithoutClaimingDatabaseAdmission() throws Exception {
+        var original = mapper.valueToTree(event(UUID.randomUUID(), .2, now.minusSeconds(3)));
+        var first = decodeJson(mapper.writeValueAsString(original));
+        var changedId = (ObjectNode) original.deepCopy();
+        changedId.put("batchId", UUID.randomUUID().toString());
+        var changedSequence = (ObjectNode) original.deepCopy();
+        changedSequence.put("sequence", original.path("sequence").longValue() + 1);
+        assertNotEquals(first.payloadSha256(), decodeJson(mapper.writeValueAsString(changedId)).payloadSha256());
+        assertNotEquals(first.payloadSha256(), decodeJson(mapper.writeValueAsString(changedSequence)).payloadSha256());
+        assertEquals(first.batch(), decodeJson(mapper.writeValueAsString(original)).batch());
     }
 
     @Test
