@@ -10,6 +10,8 @@ import java.lang.reflect.Proxy;
 import java.time.*;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.api.DynamicTest;
 
 class PatientSessionProgressServiceTest {
     final Instant start = Instant.parse("2026-01-01T00:00:00Z");
@@ -70,8 +72,11 @@ class PatientSessionProgressServiceTest {
     @Test void finishingRequiresGoalDoesNotAutoCloseAndIsIdempotent() {
         var service = timed(); var key = new IdempotencyKey("complete-key");
         service.activity(patient, session.id(), event(0, SessionActivityEvent.Type.ACTIVITY_STARTED));
+        var pendingState = state; var pendingLease = session.leaseExpiresAt(); int pendingWrites = saves;
         assertThrows(SessionProgressConflictException.class, () -> service.complete(patient, session.id(), key, Action.FINISHED));
         assertEquals(TherapySessionStatus.ACTIVE, session.status()); assertNull(completion);
+        assertEquals(pendingState, state); assertEquals(pendingLease, session.leaseExpiresAt());
+        assertTrue(session.endedAt().isEmpty()); assertEquals(pendingWrites, saves);
         now = start.plusSeconds(10);
         var progress = service.activity(patient, session.id(), event(1, SessionActivityEvent.Type.HEARTBEAT));
         assertTrue(progress.targetReached()); assertEquals(TherapySessionStatus.ACTIVE, session.status());
@@ -172,5 +177,138 @@ class PatientSessionProgressServiceTest {
                 SessionActivityEvent.Type.REPETITION_FINISHED, fresh, 1));
         assertEquals(1, state.completedRepetitions()); assertFalse(service.progress(patient, session.id()).targetReached());
         assertEquals(TherapySessionStatus.ACTIVE, session.status()); assertEquals(0, session.validSampleCount());
+    }
+
+    private PatientSessionProgressService readyTimed() {
+        var service = timed();
+        service.activity(patient, session.id(), event(0, SessionActivityEvent.Type.ACTIVITY_STARTED));
+        now = start.plusSeconds(10);
+        assertTrue(service.activity(patient, session.id(), event(1, SessionActivityEvent.Type.HEARTBEAT)).targetReached());
+        return service;
+    }
+
+    @Test void freshKeyClosesOnlyTheRequestedOlderSessionAndDoesNotBindAnotherSession() {
+        readyTimed();
+        var older = session; var olderState = state;
+        // Build a second aggregate through the existing fixture, not the session-start use case.
+        // This tests completion routing, not permission to start two simultaneous sessions.
+        timed();
+        var other = session;
+        var otherState = SessionActivityProgress.empty();
+        var otherLease = other.leaseExpiresAt();
+        var available = Map.of(older.id(), older, other.id(), other);
+        var states = Map.of(older.id(), olderState, other.id(), otherState);
+        var completions = new HashMap<TherapySessionId, SessionActivityRepository.Completion>();
+        var saved = new ArrayList<TherapySessionId>();
+        var closed = new ArrayList<TherapySessionId>();
+        ClinicalPatientRepository patients = new ClinicalPatientRepository() {
+            public Optional<ClinicalPatient> findByPatientSubject(CognitoSubject subject) {
+                return patient.equals(subject) ? Optional.of(owner) : Optional.empty();
+            }
+            public void save(ClinicalPatient ignored) { throw new AssertionError(); }
+        };
+        var sessions = (TherapySessionRepository) Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[]{TherapySessionRepository.class}, (proxy, method, args) -> switch (method.getName()) {
+                    case "findByIdForUpdate" -> Optional.ofNullable(available.get(args[0]));
+                    case "save" -> { saved.add(((TherapySession) args[0]).id()); yield null; }
+                    default -> throw new AssertionError("Unexpected path " + method.getName());
+                });
+        SessionActivityRepository activity = new SessionActivityRepository() {
+            public Optional<SessionActivityProgress> find(TherapySessionId id) { return Optional.ofNullable(states.get(id)); }
+            public Optional<Receipt> receipt(TherapySessionId id, UUID event) { throw new AssertionError(); }
+            public Optional<Completion> completion(TherapySessionId id) { return Optional.ofNullable(completions.get(id)); }
+            public void save(TherapySessionId id, SessionActivityProgress next) { throw new AssertionError(); }
+            public void append(TherapySessionId id, Receipt receipt) { throw new AssertionError(); }
+            public void close(TherapySessionId id, Completion value) { closed.add(id); completions.put(id, value); }
+        };
+        var service = new PatientSessionProgressService(patients, sessions, activity, Clock.fixed(now, ZoneOffset.UTC));
+        var key = new IdempotencyKey("fresh-client-key");
+        var result = service.complete(patient, older.id(), key, Action.FINISHED);
+        assertEquals(older.id().value(), result.therapySessionId());
+        assertEquals("COMPLETED", result.status());
+        assertEquals(Optional.of(now), older.endedAt()); assertTrue(older.leaseExpiresAt().isEmpty());
+        assertEquals(olderState.activeMilliseconds(), result.activeMilliseconds());
+        assertEquals(List.of(older.id()), saved); assertEquals(List.of(older.id()), closed);
+        assertEquals(1, completions.size());
+        var receipt = completions.get(older.id());
+        assertEquals(key.value(), receipt.key()); assertEquals(Action.FINISHED, receipt.action());
+        assertEquals(result, receipt.acknowledgement());
+        assertEquals(TherapySessionStatus.ACTIVE, other.status()); assertTrue(other.endedAt().isEmpty());
+        assertEquals(otherLease, other.leaseExpiresAt()); assertFalse(completions.containsKey(other.id()));
+        assertEquals(otherState, states.get(other.id())); assertEquals(olderState, states.get(older.id()));
+        var otherProgress = service.progress(patient, other.id());
+        assertEquals(other.id().value(), otherProgress.therapySessionId());
+        assertEquals(0, otherProgress.activeMilliseconds()); assertFalse(otherProgress.targetReached());
+        assertEquals(List.of(older.id()), saved); assertEquals(List.of(older.id()), closed);
+    }
+
+    @TestFactory List<DynamicTest> firstClosureAtOrAfterLeaseExpiryCannotWriteEvenWithTargetReached() {
+        var tests = new ArrayList<DynamicTest>();
+        for (var action : Action.values()) {
+            for (long delay : new long[]{0, 1}) {
+                tests.add(DynamicTest.dynamicTest(action + "-expiry-plus-" + delay, () -> {
+                    var fixture = new PatientSessionProgressServiceTest();
+                    var service = fixture.readyTimed();
+                    var before = service.progress(fixture.patient, fixture.session.id());
+                    var lease = fixture.session.leaseExpiresAt();
+                    var progress = fixture.state; var receipts = Map.copyOf(fixture.receipts);
+                    int writes = fixture.saves;
+                    fixture.now = lease.orElseThrow().plusSeconds(delay);
+                    assertThrows(SessionProgressConflictException.class, () -> service.complete(fixture.patient,
+                            fixture.session.id(), new IdempotencyKey("expired-close"), action));
+                    assertEquals(before, service.progress(fixture.patient, fixture.session.id()));
+                    assertEquals(TherapySessionStatus.ACTIVE, fixture.session.status());
+                    assertTrue(fixture.session.endedAt().isEmpty()); assertNull(fixture.completion);
+                    assertEquals(lease, fixture.session.leaseExpiresAt()); assertEquals(progress, fixture.state);
+                    assertEquals(receipts, fixture.receipts); assertEquals(writes, fixture.saves);
+                }));
+            }
+        }
+        return tests;
+    }
+
+    @TestFactory List<DynamicTest> completionReplayPreservesOriginalReceiptAndRejectsChangedKeyOrAction() {
+        return Arrays.stream(Action.values()).map(action -> DynamicTest.dynamicTest(action.name(), () -> {
+            var fixture = new PatientSessionProgressServiceTest();
+            var service = fixture.readyTimed();
+            var key = new IdempotencyKey("original-close");
+            var previousExpiry = fixture.session.leaseExpiresAt().orElseThrow();
+            var result = service.complete(fixture.patient, fixture.session.id(), key, action);
+            var receipt = fixture.completion; var progress = fixture.state;
+            var lease = fixture.session.leaseExpiresAt(); var endedAt = fixture.session.endedAt();
+            var receipts = Map.copyOf(fixture.receipts); int writes = fixture.saves;
+            assertEquals(Optional.of(fixture.now), endedAt);
+            assertTrue(lease.isEmpty());
+            fixture.now = previousExpiry.plusSeconds(1);
+            assertEquals(result, service.complete(fixture.patient, fixture.session.id(), key, action));
+            assertThrows(SessionProgressConflictException.class, () -> service.complete(fixture.patient,
+                    fixture.session.id(), new IdempotencyKey("changed-close"), action));
+            var changedAction = action == Action.FINISHED ? Action.ABANDONED : Action.FINISHED;
+            assertThrows(SessionProgressConflictException.class, () -> service.complete(fixture.patient,
+                    fixture.session.id(), key, changedAction));
+            assertSame(receipt, fixture.completion); assertEquals(result, fixture.completion.acknowledgement());
+            assertEquals(result.status(), fixture.session.status().name());
+            assertEquals(endedAt, fixture.session.endedAt()); assertEquals(lease, fixture.session.leaseExpiresAt());
+            assertEquals(progress, fixture.state); assertEquals(receipts, fixture.receipts);
+            assertEquals(writes, fixture.saves);
+        })).toList();
+    }
+
+    @Test void foreignPatientCannotCloseOrRetrieveACompletionEvenKnowingItsKey() {
+        var service = readyTimed(); var key = new IdempotencyKey("known-close-key");
+        var foreign = new CognitoSubject("foreign-patient");
+        var progress = state; var lease = session.leaseExpiresAt();
+        var accepted = Map.copyOf(receipts); int writes = saves;
+        assertThrows(SecurityException.class, () -> service.complete(foreign, session.id(), key, Action.FINISHED));
+        assertEquals(TherapySessionStatus.ACTIVE, session.status()); assertTrue(session.endedAt().isEmpty());
+        assertNull(completion); assertEquals(writes, saves);
+        assertEquals(lease, session.leaseExpiresAt()); assertEquals(progress, state); assertEquals(accepted, receipts);
+        var result = service.complete(patient, session.id(), key, Action.FINISHED);
+        var original = completion; var endedAt = session.endedAt(); writes = saves;
+        assertThrows(SecurityException.class, () -> service.complete(foreign, session.id(), key, Action.FINISHED));
+        assertSame(original, completion); assertEquals(result, completion.acknowledgement());
+        assertEquals(endedAt, session.endedAt()); assertEquals("COMPLETED", session.status().name());
+        assertEquals(progress, state); assertTrue(session.leaseExpiresAt().isEmpty());
+        assertEquals(accepted, receipts); assertEquals(writes, saves);
     }
 }
