@@ -17,16 +17,39 @@ class CreateSystematicExplorationReportSnapshotServiceTest {
         return new Summary("systematic-exploration-trial-v1",SESSION,new UUID(0,4),1,origin,1,List.of(new Traversal("trial-1",Outcome.COMPLETED,4,100,4000)));
     }
     WriteResult create(Fixture f, String key, Origin origin) { return f.service().create(DOCTOR,TOKEN,PATIENT,SESSION,key,null,null,null,null,origin); }
-    @Test void matchingSelectionReplaysFrozenSectionWithoutEnrichmentAndNewKeyCapturesNewMetrics() {
+    private void assertFrozenSection(Fixture f, Snapshot copy, Summary expected) throws Exception {
+        var json = f.mapper.readTree(copy.reportJson());
+        // Parse both wire documents identically; valueToTree retains Java LongNode widths.
+        var expectedSection = f.mapper.readTree(f.mapper.writeValueAsString(expected));
+        assertEquals(expectedSection, json.get("systematicExploration"));
+        assertEquals(PATIENT, copy.clinicalPatientId()); assertEquals(SESSION, copy.therapySessionId());
+        assertEquals(TIME, copy.createdAt());
+        assertEquals(PATIENT.toString(), json.path("clinicalPatientId").textValue());
+        assertEquals(SESSION.toString(), json.path("execution").path("therapySessionId").textValue());
+        assertEquals(expected.configurationId().toString(), json.path("configuration").path("configurationId").textValue());
+        assertEquals(expected.configurationVersion(), json.path("configuration").path("configurationVersion").longValue());
+    }
+    @Test void matchingSelectionReplaysFrozenSectionWithoutEnrichmentAndNewKeyCapturesNewMetrics() throws Exception {
         var f = fixture(); var first = create(f," key ",Origin.SYNTHETIC); assertTrue(first.created());
+        var originalSummary = f.explorationSummary; var originalJson = first.snapshot().reportJson();
+        assertFrozenSection(f,first.snapshot(),originalSummary);
         int peers = f.peers; f.failPeer = "names"; f.explorationSummary = null;
+        f.firstName = "Changed";
         var replay = create(f,"key",Origin.SYNTHETIC);
         assertEquals(first.snapshot(),replay.snapshot()); assertFalse(replay.created()); assertEquals(peers,f.peers);
         assertThrows(SessionReportSnapshotSelectionConflictException.class,() -> create(f,"key",Origin.PRODUCER_REPORTED));
         assertThrows(SessionReportSnapshotSelectionConflictException.class,() -> create(f,"key",null));
         assertEquals(peers,f.peers); assertEquals(1,f.writes);
-        f.failPeer = null; f.explorationSummary = summary(Origin.PRODUCER_REPORTED);
+        assertEquals(originalJson,f.copies.get("key").reportJson());
+        f.failPeer = null; f.explorationSummary = new Summary("systematic-exploration-trial-v1",SESSION,
+                new UUID(0,4),1,Origin.PRODUCER_REPORTED,1,List.of(new Traversal("trial-new",Outcome.TIMED_OUT,1,25,4000)));
         var next = create(f,"new",Origin.PRODUCER_REPORTED); assertTrue(next.created());
+        assertNotEquals(first.snapshot().id(),next.snapshot().id()); assertEquals(2,f.copies.size());
+        assertFrozenSection(f,next.snapshot(),f.explorationSummary);
+        assertFrozenSection(f,first.snapshot(),originalSummary);
+        assertEquals(originalJson,f.copies.get("key").reportJson());
+        assertEquals(next.snapshot(),f.copies.get("new"));
+        assertTrue(next.snapshot().reportJson().contains("Changed")); assertFalse(originalJson.contains("Changed"));
         assertTrue(next.snapshot().reportJson().contains("PRODUCER_REPORTED"));
         assertFalse(first.snapshot().reportJson().contains("PRODUCER_REPORTED"));
     }
@@ -36,6 +59,36 @@ class CreateSystematicExplorationReportSnapshotServiceTest {
         assertNull(failure.getCause()); assertEquals(0,f.writes); assertTrue(f.copies.isEmpty());
         f.failPeer=null; f.explorationSummary=null;
         assertThrows(IllegalStateException.class,()->create(f,"key",Origin.SYNTHETIC)); assertEquals(0,f.writes);
+        assertTrue(f.copies.isEmpty());
+    }
+    @Test void incompatibleSummaryBindingsNeverReachSnapshotInsertion() {
+        for (var invalid : List.of(
+                new Summary("systematic-exploration-trial-v1",new UUID(0,99),new UUID(0,4),1,Origin.SYNTHETIC,1,
+                        List.of(new Traversal("trial-1",Outcome.COMPLETED,4,100,4000))),
+                new Summary("systematic-exploration-trial-v1",SESSION,new UUID(0,99),1,Origin.SYNTHETIC,1,
+                        List.of(new Traversal("trial-1",Outcome.COMPLETED,4,100,4000))),
+                new Summary("systematic-exploration-trial-v1",SESSION,new UUID(0,4),2,Origin.SYNTHETIC,1,
+                        List.of(new Traversal("trial-1",Outcome.COMPLETED,4,100,4000))),
+                summary(Origin.PRODUCER_REPORTED))) {
+            var f = fixture(); f.explorationSummary = invalid;
+            var failure = assertThrows(IllegalStateException.class,()->create(f,"key",Origin.SYNTHETIC));
+            assertNull(failure.getCause()); assertEquals(0,f.writes); assertTrue(f.copies.isEmpty());
+            assertEquals(1,f.explorationCalls);
+        }
+    }
+    @Test void omittedSectionAndConfirmedEmptySelectionProduceDifferentFrozenCopies() throws Exception {
+        var f = fixture(); var omitted = f.create("omitted").snapshot();
+        assertFalse(f.mapper.readTree(omitted.reportJson()).has("systematicExploration"));
+        assertEquals(0,f.explorationCalls);
+        f.explorationSummary = new Summary("systematic-exploration-trial-v1",SESSION,new UUID(0,4),1,
+                Origin.SYNTHETIC,0,List.of());
+        var empty = create(f,"empty",Origin.SYNTHETIC).snapshot();
+        assertFrozenSection(f,empty,f.explorationSummary);
+        var section = f.mapper.readTree(empty.reportJson()).path("systematicExploration");
+        assertEquals(0,section.path("reportedTrialCount").longValue());
+        assertTrue(section.path("traversals").isArray()); assertEquals(0,section.path("traversals").size());
+        assertEquals(1,f.explorationCalls); assertEquals(2,f.writes); assertEquals(2,f.copies.size());
+        assertEquals(omitted,f.copies.get("omitted")); assertEquals(empty,f.copies.get("empty"));
     }
     @Test void legacyOmissionAndSelectionAreDifferentIncludingBothDirections() {
         var f = fixture(); var old = f.create("key"); int peers = f.peers;

@@ -128,6 +128,8 @@ public class CreateSessionReportSnapshotServiceTest {
     @Test void createsFrozenWhitelistAndReplaysWithoutCompositionWhileNewKeyCreatesAnotherCopy() {
         var f = new Fixture(); var first = f.create(" key-one ");
         assertTrue(first.created()); assertEquals(1, f.writes); assertEquals(3, f.peers);
+        assertEquals(PATIENT, first.snapshot().clinicalPatientId()); assertEquals(SESSION, first.snapshot().therapySessionId());
+        assertEquals(first.snapshot(), f.copies.get("key-one"));
         assertEquals(TIME, first.snapshot().createdAt()); assertTrue(first.snapshot().reportJson().contains("Synthetic"));
         assertFalse(first.snapshot().reportJson().contains(DOCTOR)); assertFalse(first.snapshot().reportJson().contains(TOKEN));
         f.firstName = "Changed"; f.failPeer = "names";
@@ -136,6 +138,7 @@ public class CreateSessionReportSnapshotServiceTest {
         f.failPeer = null; var second = f.create("key-two");
         assertTrue(second.created()); assertNotEquals(first.snapshot().id(), second.snapshot().id());
         assertTrue(second.snapshot().reportJson().contains("Changed")); assertFalse(first.snapshot().reportJson().contains("Changed"));
+        assertEquals(first.snapshot(), f.copies.get("key-one")); assertEquals(second.snapshot(), f.copies.get("key-two"));
         assertEquals(2, f.copies.size());
     }
     @Test void deniedOrUnavailableReadsNeverComposeOrWriteAndReplayRequiresCurrentAuthorization() {

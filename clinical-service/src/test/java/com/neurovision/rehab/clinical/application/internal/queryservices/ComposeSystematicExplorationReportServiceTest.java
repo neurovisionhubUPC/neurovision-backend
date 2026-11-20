@@ -25,7 +25,13 @@ public class ComposeSystematicExplorationReportServiceTest extends ComposeSessio
     SessionReportV1 selected() { return selectedService().compose(DOCTOR,TOKEN,PATIENT,SESSION,null,null,null,null,Origin.SYNTHETIC); }
     void exploration() { detail = detail("COMPLETED",systematicExplorationParameters()); }
     @Test void explicitSelectionPreservesMetricsAndOmissionNeverCallsNewPort() {
-        exploration(); assertSame(summary,selected().systematicExploration());
+        exploration(); var report = selected(); assertSame(summary,report.systematicExploration());
+        assertEquals(report.execution().therapySessionId(),summary.therapySessionId());
+        assertEquals(report.configuration().configurationId(),summary.configurationId());
+        assertEquals(report.configuration().configurationVersion(),summary.configurationVersion());
+        assertEquals("systematic-exploration-trial-v1",report.systematicExploration().calculationVersion());
+        assertEquals(Origin.SYNTHETIC,report.systematicExploration().dataOrigin());
+        assertEquals(List.of(new Traversal("trial-1",Outcome.COMPLETED,4,100,4000)),report.systematicExploration().traversals());
         assertEquals(List.of("detail","resolve","names","doctor","analytics","exploration"),calls);
         calls.clear(); assertNull(selectedService().compose(DOCTOR,TOKEN,PATIENT,SESSION).systematicExploration());
         assertFalse(calls.contains("exploration"));
