@@ -20,6 +20,8 @@ Use `Authorization: Bearer <access-token>` on both routes and `Content-Type: app
 
 For retry compatibility, preserve the complete queued batch, including its original `sentAt`; do not rebuild its timestamps or samples on another attempt. Follow the [small offline queue check](retry-queue-check.md) before changing the frontend or backend.
 
+For the verified input-switch and concurrent-drain risks, follow the [minimum queue lifecycle corrections](queue-lifecycle-fixes.md). That handoff also separates pending delivery, permanent rejection and backend behavior after session closure.
+
 ### Read historical samples
 
 Provide a known `streamId` UUID and `from` / `to` ISO instants (prefer UTC with `Z`). The filter is on `sampleTime`: `from` inclusive, `to` exclusive, with `from < to` and a window of at most 15 minutes. `limit` is 1–200, default 100. This is a single-stream read, not a stream discovery endpoint.
