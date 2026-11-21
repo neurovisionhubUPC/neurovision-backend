@@ -61,3 +61,5 @@ Preserve the existing local regression coverage for queue identity, input switch
 Provide the frontend commit/date, affected functions, exact existing test command, observed results for each interleaving and any remaining limitation. Use synthetic identities only in memory; do not export tokens, patient identifiers, gaze samples or raw HTTP bodies.
 
 **Finite closure:** stale continuations cannot initiate a later closure stage or mutate the replacement lifecycle, while the unchanged-session path and original-key retry remain correct. Backend Java, authenticated persistence, mounted-browser navigation and server effects of already-dispatched requests remain separate evidence boundaries, not results established by these offline checks.
+
+For progress-cache isolation and uncertain-timeout recovery, follow the [minimum closure recovery contract](session-closure-recovery.md). It preserves these lifecycle guards and the original completion key/action without adding backend endpoints or durable browser storage.
