@@ -14,6 +14,8 @@ Backend source checked at `6721ba2` on 2026-11-21. The supplied frontend audit s
 
 Reuse [integration.md](integration.md) and the [LIFE-POST-GATE guard instructions](session-closure-lifecycle-check.md). No new endpoints, queue framework, storage layer, automatic retry loop or prescription changes are required.
 
+For an uncertain activity POST before closure, use [pending activity recovery](pending-activity-recovery.md). Activity `eventId` recovery and completion `Idempotency-Key` recovery are different operations; neither acknowledges the other.
+
 ## 1. Bind progress and operation identity — LIFE-CACHE-01
 
 - Capture patient/account context, session ID, completion key, action and lifecycle generation together before the asynchronous close flow starts. Reuse the existing identity/controller mechanism.

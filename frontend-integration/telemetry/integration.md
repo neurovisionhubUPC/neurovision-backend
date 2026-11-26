@@ -22,6 +22,8 @@ For retry compatibility, preserve the complete queued batch, including its origi
 
 For the verified input-switch and concurrent-drain risks, follow the [minimum queue lifecycle corrections](queue-lifecycle-fixes.md). That handoff also separates pending delivery, permanent rejection and backend behavior after session closure.
 
+Keep new mouse interaction out of `gazeSamples`; follow the [gaze/mouse separation handoff](gaze-mouse-separation.md). V1 has no numeric input-origin field, and gameplay coordinates do not automatically produce a cursor heatmap.
+
 ### Read historical samples
 
 Provide a known `streamId` UUID and `from` / `to` ISO instants (prefer UTC with `Z`). The filter is on `sampleTime`: `from` inclusive, `to` exclusive, with `from < to` and a window of at most 15 minutes. `limit` is 1–200, default 100. This is a single-stream read, not a stream discovery endpoint.
